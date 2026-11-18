@@ -1,0 +1,24 @@
+[Unit]
+Description=Goodix touch panel filter (evdev level)
+# The alternative policy to goodix-touch.service.  It works on the
+# hid-multitouch evdev node rather than raw HID, so it cannot see contact ids;
+# instead it trusts by age and by "a cohort is a phantom storm".  Kept because
+# it is the filter that felt right on this panel, and the two rules it has that
+# the HID driver does not - dropping debris when the gesture ends, and
+# force-releasing a frozen contact - are the ones that map onto the symptoms.
+After=touch-fuzz.service
+Conflicts=goodix-touch.service
+# Needs the panel's fuzz applied first, or a stationary press drifts past
+# Chromium's 8 px touch slop and the tap becomes a cancelled scroll.
+Wants=touch-fuzz.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/touch-filter.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target
