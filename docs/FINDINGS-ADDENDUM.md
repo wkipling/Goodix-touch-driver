@@ -354,3 +354,58 @@ touch to a plain USB-A port would remove this failure mode entirely, because
 the display already bypasses the Thunderbolt PCIe switch (it is DP alt-mode on
 `i915 DP-2`). It was rejected on the hardware, not the merits: the kiosk has no
 free USB ports, and the panel appears to be single-cable.
+
+## 11. The earlier evdev filter and this driver agree about identity
+
+Before the HID rewrite the kiosk ran an evdev-level filter,
+`/usr/local/bin/touch-filter.py`, which had been left on the machine with no
+service pointing at it. It is now preserved as
+`reference/touch-filter-evdev.py` with
+`deploy/touch-filter-evdev.service` so it can be switched back to in one
+command. It works on the `hid-multitouch` node and therefore cannot see contact
+ids at all; instead it trusts by age:
+
+- a contact born with nothing else live is trusted at once;
+- a contact born while another is live must survive 200 ms (phantoms die within
+  180 ms);
+- contacts born in the same frame are treated as a phantom storm and only the
+  **highest slot** is trusted;
+- a contact frozen for 5 s is force-released and then ignored until it lifts;
+- when no trusted contact remains, contacts still down are dropped as debris.
+
+The "highest slot" rule looked like a direct contradiction of this driver's
+"id 1 is the real finger" rule. It is not:
+
+**id 1 is the last tipped contact in the frame in 94.7% of multi-contact frames
+(868 of 917).** `hid-multitouch` assigns slots in report order, so the last
+block becomes the highest slot. The two rules name the same contact from two
+layers.
+
+### What was ported, and what was not
+
+Ported: **the frozen-contact release.** This driver had a real hole here. The
+panel is change-driven, but the firmware can hold id 1 asserted while emitting
+byte-identical frames. Because the contact keeps being reported, `last_real`
+keeps refreshing and the 30 ms absence grace never arms, so the press never
+ends. A press that reports without moving for 5 s is now released, and that
+contact id is ignored until it lifts — without the second half, the still-
+asserting contact is re-pressed on the next frame and you get a press/release
+cycle every stuck interval instead of one stuck press. Motion resets the timer,
+so a slow slider drag is unaffected. `TOUCH_STUCK_MS=0` disables it.
+
+Not ported, because this driver already has the equivalent:
+
+| earlier rule | why it is not needed here |
+|---|---|
+| highest slot in a cohort | same contact as id 1, 94.7% measured |
+| 200 ms trust for a second contact | ids 2-10 are never trusted at all |
+| drop debris when the gesture ends | there is no debris to promote; nothing but id 1 is tracked |
+
+Not fixed by either filter: the latch. It asserts id 1 with motion, so a
+stillness timer does not fire, and it never produces a second press for the
+ghost guard to compare against.
+
+The ghost guard's coverage limit from §9 is unchanged: it catches 2 of the 7
+ultra-short phantom presses in the captures. If wrong-cell taps persist, the
+next thing to widen is `TOUCH_GHOST_GAP_MS`, and the two surviving hypotheses
+are recorded under "The comparison point, and an unresolved ambiguity".

@@ -126,6 +126,15 @@ GHOST_GAP_MS = float(os.environ.get("TOUCH_GHOST_GAP_MS", "120"))
 GHOST_DX = int(os.environ.get("TOUCH_GHOST_DX", "120"))
 GHOST_DY = int(os.environ.get("TOUCH_GHOST_DY", "400"))
 
+# A contact that stops moving is stuck, not held.  The panel is change-driven
+# and the firmware sometimes keeps id 1 asserted while emitting byte-identical
+# frames, so `last_real` keeps refreshing and the 30 ms release never arms: the
+# press would never end.  Motion resets this timer, so a slow slider drag is
+# never cut short.  Borrowed from the evdev-level filter that ran before this
+# driver (see reference/touch-filter-evdev.py), which is the one rule of its
+# gesture lifecycle that this driver was missing.  0 disables it.
+STUCK_MS = float(os.environ.get("TOUCH_STUCK_MS", "5000"))
+
 # The by-id name is stable across re-enumeration; the capability scan is the
 # fallback for a machine whose by-id links have not been populated yet.
 SRC_HID = os.environ.get("TOUCH_HID", "")
@@ -309,7 +318,8 @@ class Panel:
     """Tracks which reported contact is the real finger."""
 
     def __init__(self, out, grace_secs=None, ghost_guard=None,
-                 ghost_gap_ms=None, ghost_dx=None, ghost_dy=None):
+                 ghost_gap_ms=None, ghost_dx=None, ghost_dy=None,
+                 stuck_secs=None):
         self.out = out
         self.grace_secs = (GRACE_MS / 1000.0) if grace_secs is None \
             else grace_secs
@@ -331,6 +341,14 @@ class Panel:
         self.last_press = None   # {t_end, x, y} of the last accepted press
         self.ghost_presses = 0
 
+        # frozen-contact release state
+        self.stuck_secs = (STUCK_MS / 1000.0) if stuck_secs is None \
+            else stuck_secs
+        self.last_pos = None     # last (x, y) reported for this press
+        self.last_move = None    # monotonic time the position last changed
+        self.stuck_presses = 0
+        self.stuck_id = None     # contact id released as frozen; ignore till it lifts
+
     def _is_ghost(self, x, y, now):
         """True when a press has the shape of a phantom rather than a tap."""
         if not self.guard or self.last_press is None:
@@ -341,14 +359,23 @@ class Panel:
         return (abs(x - self.last_press["x"]) <= self.guard_dx and
                 abs(y - self.last_press["y"]) >= self.guard_dy)
 
-    def _release(self):
+    def _release(self, stuck=False):
         if self.current is not None and not self.suppressed and \
                 self.last_real is not None and self.press_origin is not None:
             self.last_press = {"t_end": self.last_real,
                                "x": self.press_origin[0],
                                "y": self.press_origin[1]}
+        if stuck:
+            # Keep ignoring this contact until the panel says it is gone: it is
+            # still asserting itself every frame, and re-pressing would turn a
+            # stuck contact into an endless press/release cycle.
+            self.stuck_id = self.current
+        else:
+            self.stuck_id = None
         self.suppressed = False
         self.press_origin = None
+        self.last_pos = None
+        self.last_move = None
         self.out.release()
         self.current = None
         self.last_real = None
@@ -362,6 +389,7 @@ class Panel:
             if self.current is not None:
                 debug("  empty report -> release")
                 self._release()
+            self.stuck_id = None
             return
 
         real = [c for c in contacts if c[0] == PRIMARY_ID]
@@ -385,11 +413,17 @@ class Panel:
 
         cid, x, y = real[0]
         self.last_real = now
+        if self.current is None and self.stuck_id is not None and \
+                cid == self.stuck_id:
+            debug("  ignoring frozen contact %d until it lifts" % cid)
+            return
         if self.current is None:
             if self._is_ghost(x, y, now):
                 self.suppressed = True
                 self.current = cid
                 self.press_origin = (x, y)
+                self.last_pos = (x, y)
+                self.last_move = now
                 self.ghost_presses += 1
                 log("ghost press dropped (id %d at %d,%d, %.0f ms after the "
                     "previous one, same column)"
@@ -399,24 +433,44 @@ class Panel:
             self.suppressed = False
             self.current = cid
             self.press_origin = (x, y)
+            self.last_pos = (x, y)
+            self.last_move = now
             self.presses += 1
             self.out.press(x, y)
             log("press %d (contact id %d at %d,%d)"
                 % (self.presses, cid, x, y))
-        elif self.out.down:
-            self.out.move(x, y)
+        else:
+            if (x, y) != self.last_pos:
+                self.last_pos = (x, y)
+                self.last_move = now
+            if self.out.down:
+                self.out.move(x, y)
 
     def tick(self, now):
         """Expire a press whose finger has gone and stopped reporting.
 
         The panel is change-driven, so after a finger lifts there may be no
-        further reports to trigger the release.
+        further reports to trigger the release.  This also releases a contact
+        that keeps reporting but never moves: the firmware can hold id 1 down
+        with byte-identical frames, and without this the press never ends.
         """
-        if self.current is not None and self.last_real is not None and \
-                (now - self.last_real) >= self.grace_secs:
-            debug("  tick: id 1 absent for %dms -> release"
-                  % int((now - self.last_real) * 1000))
-            self._release()
+        if self.last_real is None or (now - self.last_real) >= self.grace_secs:
+            # The finger is gone.  A frozen-contact hold-off ends with it.
+            self.stuck_id = None
+            if self.current is not None:
+                debug("  tick: id 1 absent for %dms -> release"
+                      % int((now - self.last_real) * 1000))
+                self._release()
+            return
+        if self.current is None:
+            return
+        # Still reporting, but frozen: a stuck contact, not a held finger.
+        if self.stuck_secs > 0 and self.last_move is not None and \
+                (now - self.last_move) >= self.stuck_secs:
+            self.stuck_presses += 1
+            log("press released: contact frozen for %dms (stuck, not held)"
+                % int((now - self.last_move) * 1000))
+            self._release(stuck=True)
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +647,12 @@ def main():
             % (int(panel.guard_gap_ms), panel.guard_dx, panel.guard_dy))
     else:
         log("ghost guard: off")
+    if panel.stuck_secs > 0:
+        log("frozen-contact release: on - a press that reports without moving "
+            "for %ds is released (TOUCH_STUCK_MS=0 disables)"
+            % int(panel.stuck_secs))
+    else:
+        log("frozen-contact release: off")
     seen_lengths = set()
     late_check = time.monotonic() + 1.0
 

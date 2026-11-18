@@ -51,6 +51,12 @@ The previous Python shim read raw HID, which was the right layer, but:
   120 ms of the previous press — 5 of the 7 ultra-short phantom presses in the
   captures arrive later and are not caught. See `docs/FINDINGS-ADDENDUM.md` §9
   and `probes/simulate-ghost-press-filter.py`.
+- **Releases a frozen contact.** The firmware can hold id 1 asserted while
+  sending byte-identical frames; the contact keeps being reported, so the
+  30 ms absence grace never arms and the press would never end. A press that
+  reports without moving for 5 s is released, and that contact is ignored until
+  it lifts (otherwise it would be re-pressed every stuck interval). Motion
+  resets the timer, so a slow drag is safe; `TOUCH_STUCK_MS=0` disables it.
 - **The noise floor is applied in-process.** `fuzz=80` is also written into
   the absinfo at creation (`UI_ABS_SETUP` does work), but Xorg opens the new
   device about 100 ms later and resets it to 0 - measured with
@@ -88,6 +94,7 @@ docs/FIRMWARE-LATCH.md         root cause, evidence, device-level levers
 deploy/goodix-touch.service    systemd unit
 deploy/install.sh              install + switch + verify (auto-rollback)
 deploy/90-thunderbolt-no-d3hot.rules  keeps the TB3 bridges out of D3hot
+deploy/touch-filter-evdev.service    the earlier evdev filter, switchable
 deploy/rollback.sh             back to the old shim
 deploy/verify.sh               service, device, property and grab checks
 ```

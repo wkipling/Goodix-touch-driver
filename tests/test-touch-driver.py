@@ -312,6 +312,68 @@ check("known limitation: tap right after a vertical drag is dropped",
       out17.down is False and panel17.ghost_presses == 1,
       (out17.down, panel17.ghost_presses))
 
+# --------------------------------------------------------------------------
+print("13. a contact that keeps reporting but never moves is released")
+# The firmware can hold id 1 asserted while sending byte-identical frames.  The
+# 30 ms grace never arms because last_real keeps refreshing, so without this the
+# press would last forever.  Stuck time is shortened so the test is quick.
+out18, panel18 = make(stuck_secs=0.5)
+panel18.feed(dec(report([(1, True, 6000, 6000)])), now())
+check("frozen: press started", out18.down is True)
+for _ in range(12):                       # 12 x 100 ms = 1.2 s, all identical
+    advance(100)
+    panel18.feed(dec(report([(1, True, 6000, 6000)])), now())
+    panel18.tick(now())
+check("frozen: released", out18.down is False)
+check("frozen: counted once", panel18.stuck_presses == 1, panel18.stuck_presses)
+
+# It must not re-press on the very next frame: the contact is still asserting
+# itself, and re-pressing would turn one stuck contact into a press/release
+# cycle every stuck interval.
+advance(100)
+panel18.feed(dec(report([(1, True, 6000, 6000)])), now())
+panel18.tick(now())
+check("frozen: not re-pressed while still asserting", out18.down is False)
+check("frozen: still counted once", panel18.stuck_presses == 1,
+      panel18.stuck_presses)
+
+# Once the panel says the finger is up, a normal tap works again.
+advance(100)
+panel18.feed(dec(report([])), now())
+advance(50)
+panel18.feed(dec(report([(1, True, 7000, 7000)])), now())
+check("frozen: recovers after the lift", out18.down is True)
+
+# Motion has to reset the timer or a slow slider drag would be cut short.
+out19, panel19 = make(stuck_secs=0.5)
+panel19.feed(dec(report([(1, True, 6000, 6000)])), now())
+for i in range(12):                       # same span, but moving every frame
+    advance(100)
+    panel19.feed(dec(report([(1, True, 6000 + 50 * (i + 1), 6000)])), now())
+    panel19.tick(now())
+check("moving: still down", out19.down is True)
+check("moving: not counted as stuck", panel19.stuck_presses == 0,
+      panel19.stuck_presses)
+
+# One unit of jitter is motion, not a frozen contact.
+out20, panel20 = make(stuck_secs=0.5)
+panel20.feed(dec(report([(1, True, 6000, 6000)])), now())
+for i in range(12):
+    advance(100)
+    panel20.feed(dec(report([(1, True, 6000 + (i % 2), 6000)])), now())
+    panel20.tick(now())
+check("jitter: still down", out20.down is True)
+
+# It can be switched off for a page that wants indefinite holds.
+out21, panel21 = make(stuck_secs=0.0)
+panel21.feed(dec(report([(1, True, 6000, 6000)])), now())
+for _ in range(12):
+    advance(100)
+    panel21.feed(dec(report([(1, True, 6000, 6000)])), now())
+    panel21.tick(now())
+check("disabled: never released", out21.down is True)
+check("disabled: none counted", panel21.stuck_presses == 0)
+
 print()
 if failures:
     print("FAILURES: %s" % failures)
