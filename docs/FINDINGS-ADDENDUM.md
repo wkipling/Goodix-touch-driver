@@ -64,19 +64,36 @@ whose sysfs target is `0003:27C6:8191.0001`, and selects the raw evdev node by
 vendor/product plus `ABS_MT_SLOT` (skipping virtual devices). This is the same
 capability rule `touch-fuzz.py` uses, and it survives a changed event number.
 
-## 4. Still not measured
+## 4. Contact Count: measured, but not an identity signal
 
-`Contact Count` (payload offset 52) is decoded and logged, but has not yet
-been observed with the correct ten-block layout while a real finger is on the
-panel. `probes/probe-hidraw.py` records it read-only alongside the running
-driver:
+`Contact Count` (payload offset 52) was captured with the correct ten-block
+layout. Every on-wire report was 54 bytes. The count is populated (values 1–7
+across the two sessions, never 0 while contacts are present), but it equals
+the number of tipped blocks in only 74–84% of reports and counts phantoms
+too. It cannot tell which contact is the real finger. Id 1 remains the only
+identity signal — and, as §5 shows, it is not always the real finger either.
 
-```sh
-sudo python3 probes/probe-hidraw.py 120
-# touch the screen during the window
-cat /tmp/goodix-probe-summary.json
-```
+## 5. The firmware latches contact id 1
 
-If it turns out to identify the real contact set, the trust rule can be
-changed in one place (`Panel.feed`). Until then, id 1 remains the identity
-signal.
+A tap can become a 3–4 s press even though the page's release logic is sound.
+The firmware keeps id 1 asserted and streams a synthetic X oscillation while
+Y stays fixed; because id 1 never clears, the driver's release rule never
+arms. In a second form, id 1 reappears as a ghost after a real lift and can
+produce two presses 10 ms apart. This is a firmware defect that no driver can
+infer around. Full evidence, the device-level mode control, and the update
+availability are in [`FIRMWARE-LATCH.md`](FIRMWARE-LATCH.md).
+
+## 6. Correction: feature 0x21 is Input Mode, not brightness
+
+The notes describe feature `0x21` as brightness-like. On the Digitizer page,
+usages `0x52`/`0x53` are **Input Mode** and **Device Input Mode**. `usbmon` at
+bind shows `hid-multitouch` sending `SET_REPORT 0x21 = 21 02 00` (InputMode=2,
+DeviceInputMode=0). See [`FIRMWARE-LATCH.md`](FIRMWARE-LATCH.md).
+
+## 7. No public update for this controller
+
+The official Goodix HID updater (v1.8.0) does not list PID `8191` and uses a
+different report protocol. Mainline Linux has no `27c6:8191` quirk, the
+Microsoft Update Catalog has no entry for the hardware ID, and the panel EDID
+is `EMO` / `Monitor` / `demoset-1`. A firmware image/tool would have to come
+from the panel vendor.

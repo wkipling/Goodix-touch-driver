@@ -16,6 +16,13 @@ while the finger is held still. `hid-multitouch` discards the firmware's
 Contact Identifier, so the only field that identifies the real finger is gone
 by the time userspace sees an evdev event.
 
+A third defect was found later: the controller can **latch contact id 1** and
+stream a synthetic X sweep for seconds, so the finger appears to stay down
+even after it is lifted. Because the firmware never clears id 1, no driver can
+infer the release from the report stream. The evidence and the device-level
+controls that might clear it are in
+[`docs/FIRMWARE-LATCH.md`](docs/FIRMWARE-LATCH.md).
+
 The previous Python shim read raw HID, which was the right layer, but:
 
 | Problem | Effect |
@@ -28,9 +35,10 @@ The previous Python shim read raw HID, which was the right layer, but:
 
 - **All ten blocks**, decoded tolerantly. A short report is decoded as far as
   it goes instead of killing touch.
-- **Trusts HID contact id 1**, measured as the real finger (198/198 solo real
-  reports, every multi-contact report). Solo phantoms (id 5) never start a
-  press.
+- **Trusts HID contact id 1** as the real finger (198/198 solo real reports,
+  every multi-contact report); solo phantoms (id 5) never start a press.
+  Caveat: the firmware can also latch or ghost id 1 after a real lift; see
+  `docs/FIRMWARE-LATCH.md`. That failure is not recoverable downstream.
 - **Releases on the real contact disappearing**, not on "no contacts": an
   explicit empty report releases immediately; absences are released after
   `TOUCH_GRACE_MS` (default 30 ms, far below the ~170 ms tap window).
@@ -58,7 +66,15 @@ tests/test-touch-hid.py        decoding + trust rule (from the original work)
 tests/test-touch-release.py    press end + press length (from the original work)
 tests/test-touch-driver.py     guarantees added by this rewrite
 probes/probe-hidraw.py         read-only report recorder (Contact Count, ids)
-probes/probe-uinput-fuzz.py    proves absinfo fuzz survives UI_ABS_SETUP
+probes/probe-evdev.py          read-only driver-output recorder
+probes/cdp-record-touch.py     page pointer/HA action recorder
+probes/analyze-session.py      reconstruct gestures from the captures
+probes/analyze-splits.py       find presses split by id-1 gaps
+probes/stuck-detector-sim.py   test candidate latch detectors
+probes/hold-reset-test.py      re-send the controller mode command on a hold
+probes/probe-who-zeroes.py     show that Xorg resets uinput absinfo
+probes/probe-uinput-fuzz.py    prove absinfo fuzz survives UI_ABS_SETUP
+docs/FIRMWARE-LATCH.md         root cause, evidence, device-level levers
 deploy/goodix-touch.service    systemd unit
 deploy/install.sh              install + switch + verify (auto-rollback)
 deploy/rollback.sh             back to the old shim
@@ -99,22 +115,13 @@ Roll back at any time:
 sudo ./deploy/rollback.sh
 ```
 
-## Measuring Contact Count
+## Contact Count: measured
 
-The firmware's Contact Count byte is decoded but deliberately not trusted:
-it does not identify which block is real, and a solo phantom can carry any
-value. To settle whether it is populated, the report recorder can read the
-same hidraw node alongside the driver (hidraw gives every reader a copy):
-
-```sh
-sudo python3 probes/probe-hidraw.py 120
-```
-
-Touch the screen a few times during the window, then read
-`/tmp/goodix-probe-summary.json`. `contact_count_values`, `ids_seen`,
-`tipped_per_report` and `wire_lengths` answer the open questions in the
-notes. If Contact Count turns out to be reliable, the trust rule can be
-changed in one place (`Panel.feed`).
+The firmware's Contact Count byte is populated (values 1-7 across two
+sessions, never 0 while contacts are present) and every report is 54 bytes on
+the wire. It equals the number of tipped blocks in 74-84% of reports and
+counts phantoms, so it is decoded and logged but **not** used to choose the
+real contact. See `docs/FIRMWARE-LATCH.md`.
 
 ## Known trade-offs
 
@@ -130,9 +137,22 @@ changed in one place (`Panel.feed`).
   monotonic drift is eventually reported once it exceeds the deadband; the
   tests and the notes pin 80 because anything larger would itself exceed
   Chromium's touch slop when it finally fires.
+- The controller can latch id 1 for 3-4 s and stream a synthetic sweep, or
+  ghost it after a lift. No driver can see the missing release; the only
+  lever is to reset the controller state. No public firmware update exists for
+  PID 8191 (see `docs/FIRMWARE-LATCH.md`).
 - The driver keeps `hid-multitouch` bound and grabs its evdev node rather
   than unbinding it. That preserves the stylus and keyboard nodes; the cost is
   that both drivers decode the reports.
+
+## Update availability
+
+No public update was found for this controller/panel: Goodix's official HID
+updater v1.8.0 does not list PID `8191` and uses a different protocol;
+mainline Linux has no `27c6:8191` quirk; the Microsoft Update Catalog has no
+entry for the hardware ID; the panel EDID is `EMO` / `Monitor` / `demoset-1`.
+A firmware image or tool would have to come from the panel vendor. Details in
+[`docs/FIRMWARE-LATCH.md`](docs/FIRMWARE-LATCH.md).
 
 ## Why not a kernel module
 
