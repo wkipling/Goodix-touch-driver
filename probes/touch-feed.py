@@ -8,6 +8,8 @@ Serves, on 127.0.0.1 only:
 
     GET /                 index.html from DOCROOT
     GET /api/raw?since=N  {"seq": n, "reports": [...]} — reports after N
+    GET /api/mark?x=&y=   record a tap position, paired with the nearest frame
+    GET /api/marks        every recorded tap and its frame
     GET /api/health       {"ok": true, "reports": n}
 
 Each report is {"seq", "t", "count", "contacts": [[id, x, y], ...]} read from
@@ -40,6 +42,7 @@ CONTACT_COUNT_OFFSET = FINGERS * BLOCK + 2      # 52
 REPORT_LEN = CONTACT_COUNT_OFFSET + 1           # 53
 
 reports = collections.deque(maxlen=400)
+marks = collections.deque(maxlen=200)
 seq = 0
 lock = threading.Lock()
 last_report_at = 0.0
@@ -112,6 +115,41 @@ class Handler(BaseHTTPRequestHandler):
                 current = seq
                 fresh = [r for r in reports if r["seq"] > since]
             body = json.dumps({"seq": current, "reports": fresh}).encode()
+            self._send(body, "application/json")
+            return
+
+        if url.path == "/api/mark":
+            query = parse_qs(url.query)
+            try:
+                cx = float(query["x"][0])
+                cy = float(query["y"][0])
+            except (KeyError, ValueError):
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            now = time.time() * 1000
+            with lock:
+                best, delta = None, 1e9
+                for rep in reports:
+                    if not rep["contacts"]:
+                        continue
+                    d = abs(rep["t"] - now)
+                    if d < delta:
+                        best, delta = rep, d
+                marks.append({
+                    "t": round(now),
+                    "css_x": cx,
+                    "css_y": cy,
+                    "dt_ms": round(delta) if best else None,
+                    "contacts": best["contacts"] if best else [],
+                })
+            self._send(b'{"ok": true}', "application/json")
+            return
+
+        if url.path == "/api/marks":
+            with lock:
+                body = json.dumps({"marks": list(marks)}).encode()
             self._send(body, "application/json")
             return
 

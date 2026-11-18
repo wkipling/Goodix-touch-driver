@@ -23,6 +23,7 @@ grows. The driver is delivering a held press, not failing to release one.
 | Contact Count is never *less* than the number of tipped blocks | 1587 reports, 0 violations | observed |
 | Contact Count exceeds the tipped count, up to +1 usually and further occasionally | 148/1044 and 121/543 reports at +1; 14 and 19 beyond that | observed |
 | Spurious contacts carry the **real finger's X** and an invented Y | 608 multi-contact reports | observed |
+| The raw-to-screen mapping is exact: X `10.67·css`, Y `9.99·css`, residual 3 raw units | 13 calibration taps at five known targets | observed |
 | The latch is a frozen slot followed by a smooth oscillation | Two 3–4 s spans | observed |
 | The USB link and power are clean | 46 h of dmesg, no errors or resets | observed |
 | Slots are not invalidated on release | Inferring from the above | **inference** |
@@ -71,7 +72,27 @@ The three interfaces, for reference:
 The device is Full Speed (12 Mbit/s), bus powered, 200 mA, `bInterval` 1. It
 reports about every 10.4 ms while touched and is silent when idle.
 
-## 2. Contact Count: laws, measured
+## 2. Calibration is exact, so Y is not a mapping problem
+
+Thirteen taps at the five calibration targets on the test page, each paired with
+the frame the controller produced, give a clean linear fit:
+
+| Axis | Fitted | Driver assumes | Residual scatter |
+|---|---|---|---|
+| X | `raw = 10.67 * css - 2.3` | `raw = 10.67 * css` | 3 raw units (0.3 CSS px) |
+| Y | `raw = 9.99 * css + 7.9` | `raw = 10.00 * css` | 3 raw units (0.3 CSS px) |
+
+Contact id 1 landed within ten raw units of the aimed point in all thirteen
+taps, corners included. So the raw-to-screen mapping the driver uses is correct
+to a third of a pixel, and the perceived "bad Y" is entirely the phantom
+contacts drawn in the same column at invented rows — not error in the real
+contact's position.
+
+This closes calibration as an explanation. A single tap at `1381,491` produced
+`id 1 14733,4911` (correct) alongside `id 2 14748,8413`, `id 3 14733,4247` and
+`id 4 14733,1591`: same column, three invented rows, real one exactly on target.
+
+## 3. Contact Count: laws, measured
 
 Contact Count is a real count and it is monotone with respect to the frame, but
 it is the *tracker's* count, not the frame's:
@@ -92,7 +113,7 @@ This closes the original notes' open question (`GOODIX-TOUCH-DRIVER-NOTES.md`
 §4.4) and kills the idea of believing the count: it is never *below* the tipped
 set, so it can only ever add contacts, never remove the one that is stuck.
 
-## 3. The phantom geometry
+## 4. The phantom geometry
 
 This is the finding that changes the diagnosis. For every report with more than
 one contact, compare the spread of X across those contacts with the spread of Y:
@@ -125,7 +146,7 @@ logical range far more often than chance allows:
 clamped lands exactly there; `0`/`1` is the other end. X never pins, because X
 in these frames is always the live finger's column.
 
-## 4. The latch, in micro-structure
+## 5. The latch, in micro-structure
 
 Two spans, both id 1 only, taken from session 2 with the page recorder
 confirming `pointerdown` held 3058 ms and 4086 ms:
@@ -151,7 +172,7 @@ px). The motion has three phases:
 A real finger produces jagged deltas with no such regularity; this is a value
 being recomputed from a signal that is slowly wandering.
 
-## 5. What the defect is
+## 6. What the defect is
 
 **Inference.** The evidence above is consistent with one mechanism: the
 firmware never invalidates a slot on release, and its Contact Count comes from
@@ -174,7 +195,7 @@ decoded values only), the second is settled at 0 violations in 1587 reports.
 What it is *not*: a host decoding error, a missing report, or dropped frames.
 Every observed report is 54 bytes and the count laws hold across both sessions.
 
-## 6. The link and the power are clean
+## 7. The link and the power are clean
 
 Checked because a marginal bus would produce exactly this shape of nonsense:
 
@@ -191,7 +212,7 @@ Checked because a marginal bus would produce exactly this shape of nonsense:
   taps land in the right place. It *would* affect anyone using the stock
   `hid-multitouch` node, so it is worth remembering. Open question.
 
-## 7. Why no driver can fix it
+## 8. Why no driver can fix it
 
 The only per-contact liveness signal the descriptor provides is the Tip Switch
 bit. There is no In Range, no per-contact pressure, and the count cannot
@@ -203,7 +224,7 @@ Filtering downstream can suppress the *symptom* at the cost of dropping real
 taps. That is what the previous shim did, and it is why the rewrite stopped
 there.
 
-## 8. Device-level levers
+## 9. Device-level levers
 
 Ordered by how close each is to a real repair.
 
@@ -341,7 +362,7 @@ and observe with `usbmon`.
 Writing to a firmware-update channel without knowing the protocol risks
 bricking the panel. Do not fuzz it on the kiosk.
 
-## 9. What a firmware reverse engineering would need
+## 10. What a firmware reverse engineering would need
 
 There is no image to analyse. Nothing on the kiosk or the laptop is a copy of
 the controller's own code (`/lib/firmware`, dpkg, both home directories), the

@@ -142,6 +142,8 @@
     pointer = { x: ev.clientX, y: ev.clientY, type: ev.pointerType };
     pressStart = performance.now();
     document.getElementById('pointer-type').textContent = describe(ev);
+    fetch('/api/mark?x=' + Math.round(ev.clientX) + '&y=' + Math.round(ev.clientY))
+      .catch(function () {});
   });
 
   window.addEventListener('pointermove', function (ev) {
@@ -298,6 +300,27 @@
     ctx.fillText(Math.round(x) + ',' + Math.round(y), Math.min(x + 18, W - 90), Math.max(y + 20, 114));
   }
 
+  var TARGETS = [[0.10, 0.12], [0.90, 0.12], [0.10, 0.88], [0.90, 0.88], [0.50, 0.50]];
+  var LABELS = ['A', 'B', 'C', 'D', 'E'];
+
+  function targets() {
+    ctx.font = '13px ' + mono;
+    TARGETS.forEach(function (t, i) {
+      var x = t[0] * W, y = t[1] * H;
+      ctx.strokeStyle = 'rgba(223,232,239,.22)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, 26, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x - 34, y); ctx.lineTo(x - 26, y);
+      ctx.moveTo(x + 26, y); ctx.lineTo(x + 34, y);
+      ctx.moveTo(x, y - 34); ctx.lineTo(x, y - 26);
+      ctx.moveTo(x, y + 26); ctx.lineTo(x, y + 34);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(223,232,239,.30)';
+      ctx.fillText(LABELS[i], x + 32, y - 30);
+    });
+  }
+
   function frame() {
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = '#0c1014';
@@ -305,6 +328,7 @@
     grid();
     columnBand();
     contacts();
+    targets();
     crosshair();
     requestAnimationFrame(frame);
   }
