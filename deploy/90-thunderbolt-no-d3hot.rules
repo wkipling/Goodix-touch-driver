@@ -1,0 +1,26 @@
+# Keep the Thunderbolt 3 bridge hierarchy and its USB controller out of D3hot.
+#
+# On 2026-11-18 0000:07:00.0 logged:
+#
+#   pcieport 0000:07:00.0: Unable to change power state from D3hot to D0,
+#   device inaccessible
+#
+# The kernel then removed the whole Alpine Ridge hierarchy, including
+# 0000:3c:00.0 (the JHL6540 USB controller) that the touch panel hangs off, and
+# the panel re-enumerated as a new device ten seconds later.  Touch was dead for
+# that window.
+#
+# The failure is a resume *from* D3hot, so the fix is not to enter it.  Runtime
+# PM stays off for these devices; the idle power cost is negligible on a kiosk
+# that is never suspended.
+#
+# Matched on vendor/device rather than bus address so it survives a
+# re-enumeration renumbering the bridge chain.
+#
+# Reversible: delete this file (or set power/control back to "auto") and reload
+# the rules.  If a D3hot failure still happens with this in place, the cause is
+# power delivery or controller firmware, and the panel's USB should be moved off
+# the Thunderbolt controller entirely.
+
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x15d3", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{device}=="0x15d4", ATTR{power/control}="on"

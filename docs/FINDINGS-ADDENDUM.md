@@ -265,3 +265,42 @@ Consequence for the record: **page-side measurements taken through `touch-feed`
 between 16:30 and 17:06 on 2026-11-18 have no ground truth** — the feed was dead
 for that window. The driver's own journal was unaffected, because the driver
 already had reconnect handling.
+
+### The mitigation, and why it is the right lever
+
+The failing line is a *resume* from D3hot, and the bridge that logged it was
+under runtime power management:
+
+```
+0000:06:00.0  control=auto     Alpine Ridge upstream port
+0000:07:00.0  control=auto     the port that failed D3hot -> D0
+0000:07:01.0  control=on
+0000:07:02.0  control=on
+0000:07:04.0  control=auto
+0000:3c:00.0  control=auto     Alpine Ridge USB controller
+```
+
+So the lever is not to fix the resume but to never enter D3hot. The driver now
+installs `deploy/90-thunderbolt-no-d3hot.rules`, which matches the two Alpine
+Ridge device ids (`8086:15d3` bridge, `8086:15d4` USB controller) by
+vendor/device rather than bus address — a re-enumeration renumbers the chain —
+and sets `power/control=on` on every one of them. `install.sh` also applies it
+to the already-present devices, because udev only fires on `add`.
+
+All six now read `on`. The idle power cost is negligible on a kiosk that is
+never suspended, and it is reversible by deleting the rule.
+
+**This is evidence-based but unproven.** The fault has occurred once, so it
+cannot be made to recur on demand; the honest test is to watch for a repeat.
+If it recurs with runtime PM pinned, the cause is power delivery or controller
+firmware, and the panel's USB would have to leave the Thunderbolt controller —
+which needs a spare USB port the kiosk does not have, or a USB-C demux adapter.
+
+Disabling ASPM (`pcie_aspm=off`) is the next lever if this one is not enough;
+it costs a kernel command line change and a reboot, so it is not applied yet.
+
+A note on the alternative that was considered and rejected: moving the panel's
+touch to a plain USB-A port would remove this failure mode entirely, because
+the display already bypasses the Thunderbolt PCIe switch (it is DP alt-mode on
+`i915 DP-2`). It was rejected on the hardware, not the merits: the kiosk has no
+free USB ports, and the panel appears to be single-cable.

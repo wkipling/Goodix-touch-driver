@@ -85,6 +85,7 @@ probes/probe-uinput-fuzz.py    prove absinfo fuzz survives UI_ABS_SETUP
 docs/FIRMWARE-LATCH.md         root cause, evidence, device-level levers
 deploy/goodix-touch.service    systemd unit
 deploy/install.sh              install + switch + verify (auto-rollback)
+deploy/90-thunderbolt-no-d3hot.rules  keeps the TB3 bridges out of D3hot
 deploy/rollback.sh             back to the old shim
 deploy/verify.sh               service, device, property and grab checks
 ```
@@ -114,8 +115,11 @@ sudo ./deploy/install.sh
 ```
 
 This installs the driver and unit, disables `touch-filter.service` (it is not
-removed), enables `goodix-touch.service`, then runs `deploy/verify.sh`. If
-verification fails it rolls back automatically.
+removed), installs a udev rule that pins the Thunderbolt 3 bridges to
+`power/control=on` (see
+[`docs/FINDINGS-ADDENDUM.md`](docs/FINDINGS-ADDENDUM.md) §10), enables
+`goodix-touch.service`, then runs `deploy/verify.sh`. If verification fails it
+rolls back automatically.
 
 Roll back at any time:
 
