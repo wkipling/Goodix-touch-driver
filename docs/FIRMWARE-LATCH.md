@@ -1,108 +1,236 @@
-# The firmware latch — root cause of the residual hold
+# The firmware latch and the phantom contacts
 
-Written 2026-11-18 after the driver rewrite. This documents the third firmware
-defect, which the original notes did not characterise, and the device-level
-controls that might address it.
+Root cause of the residual hold, and what the controller does instead of
+releasing. First written 2026-11-18 after the driver rewrite; revised the same
+day after reading the panel's own report descriptors off the device and
+measuring the geometry of the spurious contacts.
+
+The revision moves the diagnosis from "a contact that will not release" to
+**slots that are never invalidated**. Details and the strength of each claim
+are separated below.
 
 ## Symptom
 
 A tap occasionally becomes a multi-second press and Home Assistant's ripple
 grows. The driver is delivering a held press, not failing to release one.
 
-## Measurement
+## Summary of what is established
 
-Session of 2026-11-18 10:21 AWST, with the page recorder, the driver's evdev
-output and the raw HID stream captured simultaneously.
+| Claim | Evidence | Confidence |
+|---|---|---|
+| The wire format is exactly what the notes said: 54 bytes, 10 five-byte finger blocks, Scan Time, Contact Count | The panel's own 946-byte report descriptor, read from `report_descriptor` in sysfs | observed |
+| Scan Time never advances; it is a constant `0x0101` | All 1587 captured reports | observed |
+| Contact Count is never *less* than the number of tipped blocks | 1587 reports, 0 violations | observed |
+| Contact Count exceeds the tipped count, up to +1 usually and further occasionally | 148/1044 and 121/543 reports at +1; 14 and 19 beyond that | observed |
+| Spurious contacts carry the **real finger's X** and an invented Y | 608 multi-contact reports | observed |
+| The latch is a frozen slot followed by a smooth oscillation | Two 3–4 s spans | observed |
+| The USB link and power are clean | 46 h of dmesg, no errors or resets | observed |
+| Slots are not invalidated on release | Inferring from the above | **inference** |
 
-| View | Observation |
-|---|---|
-| Page | `pointerdown` pid=173 held **3058 ms**; pid=174 held **4086 ms** |
-| Driver | press 20 **3059 ms**, press 21 **4083 ms** |
-| Raw HID | id 1 present continuously for both; 908 of 1044 reports contain id 1 |
+## 1. The wire format, from the device's own descriptor
 
-During the 3–4 s press, id 1's X swept back and forth across ~3000 raw units
-(~280 CSS px) while Y stayed within ~120 raw units. One measured run:
+Interface 0 carries a 946-byte report descriptor. Report `0x0D` is a
+TouchScreen application containing **ten** Finger collections. Each block is
+five payload bytes:
+
+| Payload bytes (after the report ID) | Field | Usage | Size |
+|---|---|---|---|
+| `5n`, bits 0 | Tip Switch | Digitizer `0x42` | 1 bit |
+| `5n`, bits 1–3 | padding | constant | 3 bits |
+| `5n`, bits 4–7 | Contact Identifier | Digitizer `0x51` | 4 bits, 0–15 |
+| `5n+1 .. 5n+2` | X | Generic Desktop `0x30` | 16 bits, 0–16383 |
+| `5n+3 .. 5n+4` | Y | Generic Desktop `0x31` | 16 bits, 0–9599 |
+| `50 .. 51` | Scan Time | Digitizer `0x56` | 16 bits, 0–65535 |
+| `52` | Contact Count | Digitizer `0x54` | 8 bits, 0–127 |
+
+Ten blocks (50 bytes) + 2 + 1 = 53 payload bytes, 54 on the wire, which is
+exactly what the panel sends. Feature reports are `0x21` (Input Mode `0x52`,
+Device Index `0x53`, both 8-bit, 0–10) and `0x0A` (Contact Count Maximum
+`0x55`, 8-bit, value 10).
+
+The usage numbering is the one the device actually uses — the Linux
+`HID_DG_*` numbers, where `0x52`–`0x56` are InputMode, DeviceIndex,
+ContactCount, ContactMax, ScanTime. The older HID usage tables assign those
+codes differently, which is where the "brightness" reading in the original
+notes came from. Two independent checks fix it: feature `0x0A` with usage
+`0x55` and logical maximum 10 is a contact maximum, not a switch; and feature
+`0x21` written as `02 00` is InputMode=2 (touchscreen), DeviceIndex=0.
+
+**Scan Time is not a counter.** It was `0x0101` in all 1587 reports across both
+sessions. It carries no liveness information and cannot be used to detect a
+stalled stream.
+
+The three interfaces, for reference:
+
+| Interface | Driver | Endpoints | Descriptor |
+|---|---|---|---|
+| 0 | `hid-multitouch` | `0x81` IN | 946 bytes: pen `0x06`, touchscreen `0x0D`, keyboard `0x09`; features `0x21`, `0x0A` |
+| 1 | `hid-generic`, `hiddev1` | `0x82` IN, `0x02` OUT | 28 bytes: vendor page `0xFF00`, report 1 in / 2 out, 63-byte payloads |
+| 2 | `hid-generic` ("Mouse") | `0x83` IN | 80 bytes: 3 buttons + wheel, absolute X/Y; silent while the panel is in multitouch mode |
+
+The device is Full Speed (12 Mbit/s), bus powered, 200 mA, `bInterval` 1. It
+reports about every 10.4 ms while touched and is silent when idle.
+
+## 2. Contact Count: laws, measured
+
+Contact Count is a real count and it is monotone with respect to the frame, but
+it is the *tracker's* count, not the frame's:
+
+| Relationship | Session 2 (1044 reports) | Session 1 (543 reports) |
+|---|---|---|
+| count < tipped blocks | 0 | 0 |
+| count == tipped blocks | 882 (84.5%) | 403 (74.2%) |
+| count == tipped + 1 | 148 | 121 |
+| count > tipped + 1 | 14 | 19 |
+| reports with no tipped block at all | 35, every one count=1 | 73, count 1 or 2 |
+
+So the controller consistently believes in one more contact than it marks. The
+"no tipped block but count=1" rows are the strongest form: the tracker holds a
+contact that the frame does not express at all.
+
+This closes the original notes' open question (`GOODIX-TOUCH-DRIVER-NOTES.md`
+§4.4) and kills the idea of believing the count: it is never *below* the tipped
+set, so it can only ever add contacts, never remove the one that is stuck.
+
+## 3. The phantom geometry
+
+This is the finding that changes the diagnosis. For every report with more than
+one contact, compare the spread of X across those contacts with the spread of Y:
+
+| Session | Multi-contact reports | X spread (median / p90) | Y spread (median / p90) | X spread < 50 |
+|---|---|---|---|---|
+| 2 | 415 | 29 / 156 | 2374 / 6814 | 263 (63%) |
+| 1 | 193 | 15 / 40 | 4637 / 7302 | 183 (95%) |
+
+**The extra contacts are the same finger's X with a different Y.** Median X
+spread of 15 raw units is about 1.4 CSS px on this panel; the median Y spread
+is a quarter of the screen height. Examples:
 
 ```
-(8149,6924) -> (7755,6908) -> (7342,6879) -> (6951,6837) -> (6634,6829)
-    -> (6594,6832) -> (6719,6819) -> (7553,6764) -> (8429,6844)
-    -> (9118,6977) -> (9280,6951) -> ... -> (6554,6952) -> ...
+[6, 8263, 6017] [3, 8220, 7031] [2, 8242, 5917]     X: 8220-8263
+[6, 8289, 8451] [5, 8220, 5086] [2, 8435, 1] [1, 8237, 6769]   X: 8220-8435
+[7, 4179, 3483] [6, 4175, 7861] [2, 4201, 1630] [1, 4179, 9599]  X: 4175-4201
 ```
 
-That is not a finger path. The panel streams a report every ~11 ms while it is
-touched (it is silent only when idle), so this is not a sampling artifact.
+And the invented Y values are not uniformly random. Y pins to the ends of its
+logical range far more often than chance allows:
 
-The release logic itself is sound: in the first session, 39 physical gestures
-produced exactly 39 driver presses and every one released. The failure is an
-input that never says "up".
+| Statistic | Session 2 | Session 1 |
+|---|---|---|
+| contacts with y in {0, 1} | 17 (1.0%) | 9 (1.1%) |
+| contacts with y >= 9590 | 27 (1.6%) | 10 (1.2%) |
+| contacts with x on an edge | 0 | 0 |
 
-## Second form: id 1 ghosts
+`9599` is `0x257F`, the Y logical maximum. A value written past the range and
+clamped lands exactly there; `0`/`1` is the other end. X never pins, because X
+in these frames is always the live finger's column.
 
-After a real lift, id 1 can reappear at a different position and sweep to an
-axis limit:
+## 4. The latch, in micro-structure
 
-```
-(4186,6412) -> (4184,7032) -> (4179,9599) -> (4180,9036) -> (4181,8893)
-```
+Two spans, both id 1 only, taken from session 2 with the page recorder
+confirming `pointerdown` held 3058 ms and 4086 ms:
 
-Two short bursts 43 ms apart produced driver presses **10 ms apart** at
-(8994,8894) and (8980,6017), which no human can produce. The rule "contact id 1
-is always the real finger" is therefore false in this firmware state.
+| Span | Duration | Reports | X range | Y range |
+|---|---|---|---|---|
+| rows 308–597 | 3028 ms | 290 | 6344–9281 | 6746–7007 |
+| rows 620–1009 | 4073 ms | 390 | 6475–9573 | 6725–7083 |
 
-## Contact Count and report length
+X covers about 3000 raw units (280 CSS px); Y stays inside 60 raw units (5 CSS
+px). The motion has three phases:
 
-- Every on-wire report observed was **54 bytes** (53-byte payload + report ID).
-- Contact Count was populated: values 1–6 in the latch session, 1–7 in the
-  first session; never 0 while contacts were present.
-- It equals the number of tipped blocks in 882/1044 reports (84%). It counts
-  phantoms too, so it cannot identify the real contact.
+1. **Frozen.** The first frames are byte-identical to each other — for example
+   `(6572, 6904)`, `(6572, 6904)`, then `(6571, 6891)` three times. The slot is
+   not updating.
+2. **Oscillation.** X then moves smoothly with no noise: consecutive deltas
+   decay to a turning point and reverse, and the speed in the middle is nearly
+   constant (~145 raw units per report). Turning points in the second span:
+   `(6618) → (9295) → (7273) → (9196) → (6775) → (9573) → (6573)`. Measured
+   period is 0.4–0.6 s depending on whether peaks or mean crossings are used.
+3. **Frozen again** at the end, then gone without any trailing release frame.
 
-This answers the notes' open question, but it does not solve the identity
-problem.
+A real finger produces jagged deltas with no such regularity; this is a value
+being recomputed from a signal that is slowly wandering.
 
-## Why no driver can fix it
+## 5. What the defect is
 
-The only identity signal is id 1, and the firmware keeps it asserted while
-inventing movement. A kernel HID driver, a different userspace filter, or
-another heuristic all consume the same stream. The defect is in the firmware's
-contact tracker; filtering downstream can only guess.
+**Inference.** The evidence above is consistent with one mechanism: the
+firmware never invalidates a slot on release, and its Contact Count comes from
+the tracker rather than from the slots it managed to fill.
 
-## Device-level levers
+- A slot that should be cleared keeps its last X and a stale Y, and because the
+  frame writer still copies the live finger's global X into every active block,
+  the phantom appears in the right column with a wrong row.
+- A Y register that holds `0xFFFF` or `0` clamps to 9599 or 0, which is exactly
+  where the pinning shows up.
+- Count > tipped is the tracker knowing about slots the frame cannot express.
+- The latch is the same failure with the finger gone: the last Y is retained and
+  X is recomputed from a decaying signal, so it wanders instead of clearing.
 
-### 1. Feature `0x21` is Input Mode, not brightness
+What would falsify it: a raw capture showing that phantom blocks carry X bytes
+that are *not* shared with the live contact, or a Contact Count that ever falls
+below the tipped count. The first needs a raw dump (the analysed sessions kept
+decoded values only), the second is settled at 0 violations in 1587 reports.
 
-The original notes describe feature `0x21` as "keyboard/display
-brightness-ish (usages 0x52/0x53)". On the Digitizer usage page, `0x52` is
-**Input Mode** and `0x53` is **Device Input Mode**, two 8-bit values in the
-range 0–10.
+What it is *not*: a host decoding error, a missing report, or dropped frames.
+Every observed report is 54 bytes and the count laws hold across both sessions.
 
-`usbmon` at driver bind shows the stock driver sending:
+## 6. The link and the power are clean
+
+Checked because a marginal bus would produce exactly this shape of nonsense:
+
+- 46 h of `dmesg` contains no `-71`/`-110` transfer errors, no device resets,
+  no `usb_set_interface failed`, and no over-current event.
+- The device reports "Bus Powered", 200 mA, and `power/control` is `on`;
+  autosuspend is not in play.
+- It sits behind a generic Terminus `1a40:0101` hub with no vendor strings, so
+  the monitor cannot be identified from the bus.
+- `hidraw0` reports `quirks = 0x1010` under the 6.12 numbering, which is
+  `HID_QUIRK_HIDDEV_FORCE` (BIT 4) plus `HID_QUIRK_X_INVERT` (BIT 12). No
+  mainline quirk table entry explains the second bit for this device, and it
+  does not affect the userspace driver, which reads `hidraw` directly and whose
+  taps land in the right place. It *would* affect anyone using the stock
+  `hid-multitouch` node, so it is worth remembering. Open question.
+
+## 7. Why no driver can fix it
+
+The only per-contact liveness signal the descriptor provides is the Tip Switch
+bit. There is no In Range, no per-contact pressure, and the count cannot
+subtract. When the firmware keeps Tip Switch set on a slot it has stopped
+updating, the stream contains no event that means "up". A kernel HID driver, a
+different userspace filter, or another heuristic all consume the same stream.
+
+Filtering downstream can suppress the *symptom* at the cost of dropping real
+taps. That is what the previous shim did, and it is why the rewrite stopped
+there.
+
+## 8. Device-level levers
+
+Ordered by how close each is to a real repair.
+
+### 1. Input Mode
+
+Feature `0x21` is Input Mode / Device Index in the range 0–10. `usbmon` at bind
+shows the stock driver sending:
 
 ```
 S Co:3:003:0 s 21 09 0321 0000 0003  = 21 02 00
 C Co:3:003:0 0 3
 ```
 
-That is `SET_REPORT` feature `0x21`, **InputMode=2 (touchscreen),
-DeviceInputMode=0**. A `GET_REPORT` of `0x0A` (Contact Count Max) returns
-`0a 0a`, so the control path is sound.
+InputMode=2 (multitouch), DeviceIndex=0. Values 0 (mouse) and 1 (single touch)
+select different reporting paths in the controller. Single touch is the
+interesting one: this driver is single-touch anyway, and a single-contact path
+may not run the slot allocator that is failing. Mode 0 wakes interface 2, whose
+mouse collection has no contact tracking at all.
 
-Re-sending `21 02 00` may reinitialise the contact tracker. That is being
-tested with `probes/hold-reset-test.py`; it is a device-state reset, not a
-filter.
-
-Two practical notes:
-- `HIDIOCGFEATURE` on hidraw for report `0x21` returns the last *input* report
-  (`0d ...`), not the feature. The stock driver only ever sets it, so do not
-  trust a hidraw read-back.
-- usbfs control transfers return `EBUSY` while usbhid owns the interface.
-  `usbmon` is the reliable way to observe the command.
+This is untested. A wrong mode can leave the panel silent until a USB reset, so
+`probes/probe-input-mode.py` restores the old value; recovery is
+`probes/hold-reset-test.py` (re-send `21 02 00`) or a USB reset (lever 2).
 
 ### 2. USB reset
 
-`USBDEVFS_RESET` (or unbinding/rebinding usbhid) reboots the controller state.
-It will clear a latched contact, at the cost of a brief re-enumeration. This is
-recovery, not repair.
+`USBDEVFS_RESET`, or unbinding and rebinding `usbhid`, clears a latched slot by
+rebooting the controller. Recovery, not repair.
 
 ### 3. Firmware update
 
@@ -115,14 +243,60 @@ No public update was found for this exact device:
 | Microsoft Update Catalog | No result for `USB\VID_27C6&PID_8191`. |
 | Panel vendor | EDID reports `EMO` / `Monitor` / serial `demoset-1`, an engineering/demo unit. No public firmware or support page found. |
 
-The only true repair is a firmware image/tool for `27c6:8191` from the panel
-vendor or seller.
+The vendor is the only source of an image, and the request has to name the PID,
+the EDID and the latch behaviour.
 
-### 4. Other input modes
+### 4. Noise, power and grounding
 
-Values other than 2 may select a mode that does not latch, or one that exposes
-raw data on the vendor interface. This is untested and should be treated as an
-experiment: a wrong mode can leave the panel unusable until a USB reset.
+An unexplained oscillating contact is also what a physically noisy panel looks
+like: the controller's peak detector follows interference instead of the finger.
+This is worth ruling out before blaming code, and it is cheap to test:
+
+- run the panel from a different powered hub or directly from another port;
+- check the panel and the hub share a solid ground, and that the USB cable is
+  shielded and short;
+- test with the display backlight at a different brightness, which changes the
+  switching noise the panel sees.
+
+None of this has been tried. Note that the pane is bus powered at 200 mA; a
+marginal supply degrades capacitive measurement first.
+
+### 5. Reaching the vendor channel
+
+Interface 1 exposes a 64-byte vendor channel (report 1 in, report 2 out, page
+`0xFF00`). An earlier attempt wrote GTX5-style read frames straight to endpoint
+`0x02` and got no response. The kernel's quirk state suggests a reason worth
+testing: with `HID_QUIRK_NO_OUTPUT_REPORTS_ON_INTR_EP` (BIT 18) set, output
+reports are delivered by control transfer, not on the interrupt endpoint. The
+bit is not set on this device today, but it is the right first check if the
+endpoint goes quiet again: send report 2 as a `SET_REPORT` on the control pipe
+and observe with `usbmon`.
+
+Writing to a firmware-update channel without knowing the protocol risks
+bricking the panel. Do not fuzz it on the kiosk.
+
+## 9. What a firmware reverse engineering would need
+
+There is no image to analyse. Nothing on the kiosk or the laptop is a copy of
+the controller's own code (`/lib/firmware`, dpkg, both home directories), the
+device exposes no update interface, and no public image exists for the PID.
+
+Three routes, in order of realism:
+
+1. **Vendor.** An image, or the vendor's Windows update tool with its bundled
+   `.bin`. This is the only route that yields a repairable firmware.
+2. **Read-out through the vendor channel.** Goodix updaters read flash over the
+   interface-1 channel before writing it. If this firmware implements a read
+   command, the image can be dumped and analysed like any other binary. The
+   command set for this panel is unknown; it would have to be identified from
+   the vendor's tool or captured from a Windows session running it, not guessed.
+3. **Nothing else.** The USB device descriptor carries no firmware version, so
+   even identifying which image would apply needs the vendor.
+
+With bytes in hand the workflow is unchanged from any other binary: open the
+image, locate the report-fill routine (it writes the 5-byte blocks, the constant
+`0x0101` Scan Time and the count byte), and look at the slot-clear path on
+release.
 
 ## Reproduction tools
 
@@ -135,4 +309,5 @@ experiment: a wrong mode can leave the panel unusable until a USB reset.
 | `probes/analyze-splits.py` | presses split by id-1 gaps |
 | `probes/stuck-detector-sim.py` | test a candidate latch detector |
 | `probes/hold-reset-test.py` | re-send the mode command during a held press |
+| `probes/probe-input-mode.py` | read or set InputMode, restoring the old value |
 | `probes/probe-who-zeroes.py` | identify what resets uinput absinfo (Xorg) |

@@ -97,3 +97,26 @@ different report protocol. Mainline Linux has no `27c6:8191` quirk, the
 Microsoft Update Catalog has no entry for the hardware ID, and the panel EDID
 is `EMO` / `Monitor` / `demoset-1`. A firmware image/tool would have to come
 from the panel vendor.
+
+## 8. The phantom geometry, measured
+
+A second pass on the two sessions decoded the panel's own report descriptor and
+measured *where* the spurious contacts sit, which the earlier pass did not do.
+Two results:
+
+- **Contact Count is monotone but wrong.** It is never less than the number of
+tipped blocks (0 violations in 1587 reports), equals it in 84.5% / 74.2% of
+reports, exceeds it by one in 148 / 121 reports, and further in 14 / 19. So the
+count belongs to the tracker, not to the frame, and it cannot be used to
+subtract a stuck contact.
+- **Phantoms share the real finger's X.** Across 608 multi-contact reports the
+median X spread between contacts is 15–29 raw units (~1.5–3 CSS px) while the
+median Y spread is 2374–4637 units, a quarter of the screen. Y also pins to its
+logical limits (`0`/`1` and `9599` = `0x257F`) far more than chance allows,
+while X never pins.
+
+That points at slots which are never invalidated on release, not at random
+corruption, and it is why the wire format's Scan Time field (constant `0x0101`
+in every report) offers no help. Full detail, the latch's micro-structure, the
+bus checks and the revised lever list are in
+[`FIRMWARE-LATCH.md`](FIRMWARE-LATCH.md).

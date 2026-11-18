@@ -2,21 +2,52 @@
 """Read (and optionally write) the panel's HID Input Mode feature report.
 
 Usage:
-    probe-input-mode.py [/dev/hidraw0] [new_mode]
+    probe-input-mode.py [/dev/hidraw0] [new_mode] [--keep] [--index N]
 
 Report 0x21 on the digitizer interface is:
-    Usage 0x52 Input Mode, Usage 0x53 Device Input Mode, two 8-bit values,
+    Usage 0x52 Input Mode, Usage 0x53 Device Index, two 8-bit values,
     logical range 0..10.
 
-Reading is side-effect free.  Writing changes the controller's mode; only the
-documented values 0x00..0x03 should be tried, and the script restores the old
-value unless --keep is given.
+The stock driver picks InputMode=2 (touchscreen) with DeviceIndex=0.  Values 0
+(mouse) and 1 (single touch) select different reporting paths inside the
+controller, and are the only device-level way to ask the firmware to stop
+running the slot allocator that produces the latch.  See
+docs/FIRMWARE-LATCH.md section 8.
+
+Reading is side-effect free.  Writing changes the controller's mode.
+
+Safety:
+    - the previous values are restored on every exit path, including failure;
+    - --keep leaves the new mode in place and prints the command that restores
+      it;
+    - if the panel goes silent, restore InputMode=2 with this script, or reset
+      the USB device (see "recovery" below).
+
+Recovery, in order:
+    sudo python3 probes/probe-input-mode.py /dev/hidraw0 2
+    sudo sh -c 'echo 0 > /sys/bus/usb/devices/3-2.3/authorized; \
+                echo 1 > /sys/bus/usb/devices/3-2.3/authorized'
+    # or simply unplug and replug the panel.
+
+Caveat: HIDIOCGFEATURE on hidraw can return the last *input* report rather than
+the feature value (observed on this panel).  Treat the echoed value as weak
+evidence and confirm the mode by what the input devices do.
 """
 import fcntl
 import os
 import sys
 
-PATH = sys.argv[1] if len(sys.argv) > 1 else "/dev/hidraw0"
+args = sys.argv[1:]
+keep = "--keep" in args
+device_index_arg = None
+if "--index" in args:
+    pos = args.index("--index")
+    device_index_arg = int(args[pos + 1], 0)
+    del args[pos:pos + 2]
+args = [a for a in args if not a.startswith("--")]
+
+PATH = args[0] if args else "/dev/hidraw0"
+mode = int(args[1], 0) if len(args) > 1 else None
 REPORT_ID = 0x21
 LEN = 3                      # report id + two 8-bit values
 
@@ -35,29 +66,55 @@ def get(fd):
     return list(buf)
 
 
-def set_feature(fd, values):
-    buf = bytearray([REPORT_ID, values[0], values[1]])
+def set_feature(fd, input_mode, device_index):
+    buf = bytearray([REPORT_ID, input_mode & 0xFF, device_index & 0xFF])
     fcntl.ioctl(fd, HIDIOCSFEATURE, buf)
 
 
-fd = os.open(PATH, os.O_RDWR)
-try:
-    before = get(fd)
-    print("%s report 0x%02X: input_mode=%d device_input_mode=%d"
-          % (PATH, before[0], before[1], before[2]))
-    if len(sys.argv) > 2:
-        mode = int(sys.argv[2], 0)
-        if mode < 0 or mode > 10:
-            print("mode must be 0..10")
-            sys.exit(2)
-        set_feature(fd, [mode, before[2]])
+def main():
+    if mode is not None and (mode < 0 or mode > 10):
+        print("mode must be 0..10")
+        return 2
+
+    if "--help" in sys.argv[1:] or "-h" in sys.argv[1:]:
+        print(__doc__)
+        sys.exit(0)
+
+    fd = os.open(PATH, os.O_RDWR)
+    previous = None
+    changed = False
+    try:
+        before = get(fd)
+        print("%s report 0x%02X: input_mode=%d device_index=%d"
+              % (PATH, before[0], before[1], before[2]))
+        if mode is None:
+            return 0
+
+        previous = (before[1], before[2])
+        device_index = before[2] if device_index_arg is None else device_index_arg
+        print("writing input_mode=%d device_index=%d" % (mode, device_index))
+        set_feature(fd, mode, device_index)
+        changed = True
+
         after = get(fd)
-        print("after write: input_mode=%d device_input_mode=%d"
+        print("read back: input_mode=%d device_index=%d (may echo input)"
               % (after[1], after[2]))
-        if "--keep" not in sys.argv:
-            set_feature(fd, [before[1], before[2]])
-            restored = get(fd)
-            print("restored: input_mode=%d device_input_mode=%d"
-                  % (restored[1], restored[2]))
-finally:
-    os.close(fd)
+        return 0
+    finally:
+        if changed and previous is not None:
+            if keep:
+                print("keeping mode; restore with: %s %s %d"
+                      % (sys.argv[0], PATH, previous[0]))
+            else:
+                try:
+                    set_feature(fd, previous[0], previous[1])
+                    print("restored input_mode=%d device_index=%d"
+                          % (previous[0], previous[1]))
+                except OSError as exc:
+                    print("RESTORE FAILED (%s) - reset the panel: see "
+                          "recovery in this file" % exc)
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
