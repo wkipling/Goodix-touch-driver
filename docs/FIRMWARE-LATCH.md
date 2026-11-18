@@ -245,6 +245,33 @@ Filtering downstream can suppress the *symptom* at the cost of dropping real
 taps. That is what the previous shim did, and it is why the rewrite stopped
 there.
 
+### Continuity tracking: simulated, and worse than trusting id 1
+
+The obvious alternative to "trust id 1" is to keep the last accepted position and
+take whichever contact is nearest to it each frame. Replayed over five captures
+(`probes/simulate-tracking.py`), it is worse everywhere:
+
+| Capture | Gestures | id 1 steps >200 | Continuity >200 | id 1 worst | Continuity worst |
+|---|---|---|---|---|---|
+| mode 2 | 29 | 2 | 4 | 2876 | 6110 |
+| mode 1 | 28 | 0 | 5 | 128 | 6076 |
+| ContactMax=1 | 11 | 27 | 32 | 2016 | 5760 |
+| session 2 | 18 | 28 | 31 | 2299 | 3664 |
+| session 1 | 37 | 8 | 14 | 3011 | 7308 |
+
+The reason is structural rather than a tuning problem: a phantom persists for a
+few frames, so a nearest-neighbour rule hops *onto* it when it happens to land
+close, then hops back when it vanishes. Anchoring to the identity instead of the
+position is the more stable choice even though the identity also lies sometimes.
+
+The two rules disagree on only 0–22 frames per capture, so there is no large pool
+of cases where continuity silently rescues a wrong tap. This closes host-side
+tracking as a route, not just by argument but by measurement.
+
+Any filter that selects by position or timing should be evaluated the same way
+before it is trusted: replay it over these captures and compare the jump
+statistics, or it may be trading one set of wrong taps for another.
+
 ## 9. Device-level levers
 
 Ordered by how close each is to a real repair.
@@ -431,4 +458,7 @@ release.
 | `probes/touch-test.html` | local 3x2 grid that shows tap and hold durations |
 | `probes/probe-mouse-node.py` | watch hidraw0 and hidraw2 together |
 | `probes/analyze-modes.py` | compare captures: contacts, column lock, count laws, spans |
+| `probes/simulate-tracking.py` | replay id-1 versus continuity tracking over captures |
+| `probes/touch-feed.py` | serve the test page plus live raw contacts and tap marks |
+| `probes/cdp-nav.py`, `probes/cdp-targets.py` | navigate the kiosk browser; report each page's DOM state |
 | `probes/probe-who-zeroes.py` | identify what resets uinput absinfo (Xorg) |
