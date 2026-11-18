@@ -218,14 +218,52 @@ C Co:3:003:0 0 3
 ```
 
 InputMode=2 (multitouch), DeviceIndex=0. Values 0 (mouse) and 1 (single touch)
-select different reporting paths in the controller. Single touch is the
-interesting one: this driver is single-touch anyway, and a single-contact path
-may not run the slot allocator that is failing. Mode 0 wakes interface 2, whose
-mouse collection has no contact tracking at all.
+select different reporting paths in the controller.
 
-This is untested. A wrong mode can leave the panel silent until a USB reset, so
-`probes/probe-input-mode.py` restores the old value; recovery is
-`probes/hold-reset-test.py` (re-send `21 02 00`) or a USB reset (lever 2).
+**Tested 2026-11-18: mode 1 does not change the report stream.** The write is
+real — `usbmon` shows `S Co:3:003:0 s 21 09 0321 0000 0003 = 210100` completing
+with status 0, and the restore `210200` likewise — so this is not a write that
+got lost. The digitizer keeps emitting the same frames:
+
+| Measure | Mode 2 (baseline) | Mode 1 (single touch) |
+|---|---|---|
+| reports | 314 in 34.8 s | 347 in 34.4 s |
+| contacts per report | 0:58, 1:145, 2:83, 3:22, 4:5, 5:1 | 0:56, 1:182, 2:78, 3:29, 4:2 |
+| multi-contact share | 35% | 31% |
+| X spread median (X<50) | 13 (110 of 111) | 10 (107 of 109) |
+| count laws <,=,+1,>+1 | 0 / 226 / 83 / 5 | 0 / 258 / 81 / 8 |
+| Y pinned low / high | 0.2% / 2.7% | 0.7% / 2.1% |
+| spans > 0.8 s | none | none |
+
+Single-touch mode still reports two to four contacts per frame, still on one X
+column with an invented Y, and still with the same count laws. So the phantom
+generator is not "multitouch mode being selected", and InputMode is not a
+lever for this defect.
+
+Two limits on that conclusion. The latch itself did not occur in either run, so
+this says nothing about latch incidence — only that the frame structure is
+unchanged. And it is still open whether this firmware honours InputMode at all;
+the discriminator is mode 0, which should wake interface 2's mouse collection
+(report `0x07`) while the digitizer falls silent. `probes/mode0-check.sh` runs
+that test; it needs a person at the panel and has not been done yet.
+
+Recovery, if a mode leaves the panel silent: `probes/probe-input-mode.py 2`, or
+the re-enumeration used to clean up after these tests, which is reliable and
+needs no unplugging:
+
+```
+sudo sh -c 'echo 0 > /sys/bus/usb/devices/3-2.3/authorized'
+sudo sh -c 'echo 1 > /sys/bus/usb/devices/3-2.3/authorized'
+```
+
+`hid-multitouch` rebinds, re-sends InputMode=2 itself, and this driver
+reattaches without intervention (verified: fresh HID instances, driver pid
+unchanged).
+
+One useful side effect: `GET_REPORT` of feature `0x21` is answered by the
+*device* with its last input report — `usbmon` shows `a1 01 0321` completing
+with `0d 10 26`. The unreadable read-back is firmware behaviour, not a hidraw
+quirk, which is why no amount of ioctl fiddling will read the mode back.
 
 ### 2. USB reset
 
@@ -314,5 +352,10 @@ release.
 | `probes/analyze-splits.py` | presses split by id-1 gaps |
 | `probes/stuck-detector-sim.py` | test a candidate latch detector |
 | `probes/hold-reset-test.py` | re-send the mode command during a held press |
-| `probes/probe-input-mode.py` | read or set InputMode, restoring the old value |
+| `probes/probe-input-mode.py` | read or set InputMode, restoring a known-good mode |
+| `probes/mode-trial.sh` | set a mode, capture, restore (watchdog if the panel goes silent) |
+| `probes/mode-write-check.sh` | prove the mode write reaches the device, on usbmon |
+| `probes/mode0-check.sh` | mode-0 discriminator: does InputMode do anything at all |
+| `probes/probe-mouse-node.py` | watch hidraw0 and hidraw2 together |
+| `probes/analyze-modes.py` | compare captures: contacts, column lock, count laws, spans |
 | `probes/probe-who-zeroes.py` | identify what resets uinput absinfo (Xorg) |
