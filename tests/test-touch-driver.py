@@ -1,0 +1,197 @@
+"""Extra tests for the rewritten driver's own guarantees.
+
+These complement test-touch-hid.py and test-touch-release.py, which encode
+the measured firmware behaviour.  Here the focus is on what the rewrite adds:
+
+  * the noise floor is part of the absinfo at creation (not EVIOCSABS),
+  * short reports are decoded tolerantly instead of killing touch,
+  * unchanged coordinates emit nothing,
+  * a userspace deadband is used only if the kernel fuzz did not stick,
+  * each press gets a fresh tracking id, and BTN_TOUCH follows it.
+
+Run:  python3 test-touch-driver.py ./goodix-touch-driver.py
+"""
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    "gd", sys.argv[1] if len(sys.argv) > 1 else "/tmp/goodix-touch-driver.py")
+gd = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gd)
+gd.DEBUG = False
+gd.log = lambda msg: None
+
+
+class FakeUInput:
+    def __init__(self, *a, **k):
+        self.events = []
+
+        class Dev:
+            path = None
+            fd = -1
+        self.device = Dev()
+
+    def write_event(self, ev):
+        self.events.append(
+            (gd.e.bytype.get(ev.type, {}).get(ev.code, ev.code), ev.value))
+
+    def close(self):
+        pass
+
+
+gd.UInput = FakeUInput
+
+NOW = [1000.0]
+
+
+def now():
+    return NOW[0]
+
+
+def advance(ms):
+    NOW[0] += ms / 1000.0
+
+
+def report(contacts, count=0, length=None):
+    data = bytearray(length if length is not None else gd.REPORT_LEN)
+    for cid, tip, x, y in contacts:
+        base = 5 * ((cid - 1) % gd.FINGERS)
+        if base + 5 > len(data):
+            continue
+        data[base] = (1 if tip else 0) | ((cid & 0x0F) << 4)
+        data[base + 1] = x & 0xFF
+        data[base + 2] = (x >> 8) & 0xFF
+        data[base + 3] = y & 0xFF
+        data[base + 4] = (y >> 8) & 0xFF
+    if len(data) > gd.CONTACT_COUNT_OFFSET:
+        data[gd.CONTACT_COUNT_OFFSET] = count
+    return bytes(data)
+
+
+def dec(payload):
+    return gd.decode(payload)[0]
+
+
+def make():
+    out = gd.Emitter.__new__(gd.Emitter)
+    out.ui = FakeUInput()
+    out.tid = 0
+    out.down = False
+    out.sent = (None, None)
+    return out, gd.Panel(out)
+
+
+def names(events, code):
+    return [v for n, v in events if n == code]
+
+
+failures = []
+
+
+def check(label, cond, detail=""):
+    if cond:
+        print("  PASS  %s" % label)
+    else:
+        print("  FAIL  %s  %r" % (label, detail))
+        failures.append(label)
+
+
+# --------------------------------------------------------------------------
+print("1. the noise floor is in the absinfo handed to UInput")
+caps = gd.abs_caps()
+by_code = dict(caps[gd.e.EV_ABS])
+for code in (gd.e.ABS_X, gd.e.ABS_Y,
+             gd.e.ABS_MT_POSITION_X, gd.e.ABS_MT_POSITION_Y):
+    check("%s fuzz=%d" % (gd.e.ABS[code], gd.FUZZ),
+          by_code[code].fuzz == gd.FUZZ, by_code[code])
+check("MT slot and tracking id keep fuzz 0",
+      by_code[gd.e.ABS_MT_SLOT].fuzz == 0
+      and by_code[gd.e.ABS_MT_TRACKING_ID].fuzz == 0)
+
+# --------------------------------------------------------------------------
+print("2. a short report is decoded, not rejected")
+short = report([(1, True, 111, 222)], length=30)   # six whole blocks
+contacts, count = gd.decode(short)
+check("contact from a short payload decoded", contacts == [(1, 111, 222)],
+      contacts)
+check("count is None when the payload is too short", count is None, count)
+check("empty payload is safe", gd.decode(b"") == ([], None))
+
+# --------------------------------------------------------------------------
+print("3. unchanged coordinates emit nothing")
+out, panel = make()
+panel.feed(dec(report([(1, True, 5000, 4000)])), now())
+out.ui.events.clear()
+for _ in range(5):
+    panel.feed(dec(report([(1, True, 5000, 4000)])), now())
+check("no motion events", out.ui.events == [], out.ui.events)
+
+# --------------------------------------------------------------------------
+print("4. changed coordinates emit once per axis")
+panel.feed(dec(report([(1, True, 5100, 4000)])), now())
+check("only X moved", names(out.ui.events, "ABS_MT_POSITION_X") == [5100]
+      and names(out.ui.events, "ABS_MT_POSITION_Y") == [],
+      out.ui.events)
+
+# --------------------------------------------------------------------------
+print("5. the in-process noise floor suppresses sub-fuzz motion")
+out2, panel2 = make()
+panel2.feed(dec(report([(1, True, 5000, 4000)])), now())
+out2.ui.events.clear()
+panel2.feed(dec(report([(1, True, 5020, 4000)])), now())   # 20 < FUZZ
+check("sub-fuzz motion suppressed", out2.ui.events == [], out2.ui.events)
+panel2.feed(dec(report([(1, True, 5100, 4000)])), now())   # 80 >= FUZZ
+check("motion past fuzz emitted",
+      names(out2.ui.events, "ABS_MT_POSITION_X") == [5100],
+      out2.ui.events)
+
+# --------------------------------------------------------------------------
+print("5b. a few units of wobble never reach the event stream")
+out2b, panel2b = make()
+panel2b.feed(dec(report([(1, True, 5000, 5000)])), now())
+out2b.ui.events.clear()
+for x, y in ((5003, 5000), (5000, 5006), (4996, 5002), (5004, 4998)):
+    panel2b.feed(dec(report([(1, True, x, y)])), now())
+check("no motion from wobble", out2b.ui.events == [], out2b.ui.events)
+
+# --------------------------------------------------------------------------
+print("6. each press gets a fresh tracking id and BTN_TOUCH follows it")
+out3, panel3 = make()
+panel3.feed(dec(report([(1, True, 100, 100)])), now())
+first_tids = names(out3.ui.events, "ABS_MT_TRACKING_ID")
+check("BTN_TOUCH down", names(out3.ui.events, "BTN_TOUCH") == [1])
+panel3.feed(dec(report([])), now())
+check("BTN_TOUCH up", names(out3.ui.events, "BTN_TOUCH") == [1, 0])
+panel3.feed(dec(report([(1, True, 200, 200)])), now())
+tids = names(out3.ui.events, "ABS_MT_TRACKING_ID")
+check("second press has a new tracking id",
+      len([t for t in tids if t != -1]) == 2 and first_tids[0] != tids[-1],
+      tids)
+
+# --------------------------------------------------------------------------
+print("7. a press on id 1 in the last block is still trusted")
+payload = bytearray(gd.REPORT_LEN)
+base = 5 * 9
+payload[base] = 0x01 | (1 << 4)
+payload[base + 1] = 0x34
+payload[base + 2] = 0x12
+payload[base + 3] = 0x78
+payload[base + 4] = 0x56
+contacts, _ = gd.decode(bytes(payload))
+check("high-block id 1 decoded", contacts == [(1, 0x1234, 0x5678)], contacts)
+out4, panel4 = make()
+panel4.feed(contacts, now())
+check("high-block id 1 starts a press", out4.down is True)
+
+# --------------------------------------------------------------------------
+print("8. an empty report releases immediately, with no grace")
+out5, panel5 = make()
+panel5.feed(dec(report([(1, True, 300, 300)])), now())
+panel5.feed(dec(report([])), now())
+check("released at once", out5.down is False)
+
+print()
+if failures:
+    print("FAILURES: %s" % failures)
+    sys.exit(1)
+print("all driver scenarios passed")

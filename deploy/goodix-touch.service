@@ -1,0 +1,23 @@
+[Unit]
+Description=Goodix 27c6:8191 touchscreen driver (raw HID -> clean single-touch)
+Documentation=file:/home/kiosk/GOODIX-TOUCH-DRIVER-NOTES.md
+After=systemd-udev-settle.service touch-fuzz.service
+Before=kiosk.service
+Wants=touch-fuzz.service
+# The old shim owns the same device; never run both.
+Conflicts=touch-filter.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/goodix-touch-driver.py
+Restart=always
+RestartSec=1
+Environment=TOUCH_GRACE_MS=30
+StandardOutput=journal
+StandardError=journal
+# Root is required for /dev/hidraw*, EVIOCGRAB and /dev/uinput.
+User=root
+Group=root
+
+[Install]
+WantedBy=graphical.target

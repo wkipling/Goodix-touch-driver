@@ -1,0 +1,14 @@
+# Goodix 27c6:8191 panel (the kiosk touchscreen).
+#
+# The panel reports fuzz=0 on every axis, so the input core passes on every
+# single-unit wobble it emits. While a finger is held still it drifts 12-22
+# CSS px, which is past Chromium's 8 px touch slop: the tap is turned into a
+# scroll and cancelled, so a tapped button only sometimes activates.
+#
+# Telling the kernel how much movement to treat as noise fixes this at the
+# input layer, before libinput or Chromium ever see it. 80 raw units is about
+# 7.5 CSS px: enough to swallow the drift, far below any deliberate movement.
+#
+# Format is value:min:max:fuzz (trailing flat:resolution optional). EVDEV_ABS_00/01 are ABS_X/ABS_Y and
+# EVDEV_ABS_35/36 are ABS_MT_POSITION_X/Y (0x35 = 53, 0x36 = 54).
+ACTION=="add|change", KERNEL=="event*", ATTRS{id/vendor}=="27c6", ATTRS{id/product}=="8191", ENV{EVDEV_ABS_00}="0:0:16383:80", ENV{EVDEV_ABS_01}="0:0:9599:80", ENV{EVDEV_ABS_35}="0:0:16383:80", ENV{EVDEV_ABS_36}="0:0:9599:80", IMPORT{builtin}="evdev"
