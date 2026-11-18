@@ -375,7 +375,7 @@ No public update was found for this exact device:
 |---|---|
 | `goodix/gdix_hid_firmware_update` v1.8.0 (latest) | GTX2/3/5/8/9, GT7868Q, Berlin, Marsei. No PID `8191`; protocol is `0x0e`/`0x0b` with 65-byte feature reports, not this device's 63-byte `0x01`/`0x02` interface. |
 | Mainline Linux v6.12 and current master | No `27c6:8191` quirk. `MT_CLS_WIN_8_NO_STICKY_FINGERS` exists but is applied to a Winbond TSTP panel. |
-| Microsoft Update Catalog | No result for `USB\VID_27C6&PID_8191`. |
+| Microsoft Update Catalog | **Contains Goodix touch-panel firmware update packages**, one of which matches this panel's HID identity (`HID\VID_27C6&UP:FF00_U:0001`) and carries an 86 KB `tpfw.bin` plus the vendor's own read/write driver. See [`FIRMWARE-PACKAGES.md`](FIRMWARE-PACKAGES.md). |
 | Panel vendor | EDID reports `EMO` / `Monitor` / serial `demoset-1`, an engineering/demo unit. No public firmware or support page found. |
 
 The vendor is the only source of an image, and the request has to name the PID,
@@ -412,9 +412,11 @@ bricking the panel. Do not fuzz it on the kiosk.
 
 ## 10. What a firmware reverse engineering would need
 
-There is no image to analyse. Nothing on the kiosk or the laptop is a copy of
-the controller's own code (`/lib/firmware`, dpkg, both home directories), the
-device exposes no update interface, and no public image exists for the PID.
+There is no image *for this panel* to analyse: nothing on the kiosk or the
+laptop is a copy of its code, and the PID appears in no public package. But
+two artefacts of the same family are now in hand — a sibling panel's `tpfw.bin`
+and, more usefully, Goodix's own HID update/read driver for the `UP:FF00_U:0001`
+collection. See [`FIRMWARE-PACKAGES.md`](FIRMWARE-PACKAGES.md).
 
 Three routes, in order of realism:
 
