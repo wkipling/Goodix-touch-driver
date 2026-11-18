@@ -691,9 +691,11 @@ def main():
         return 0
     panel = Panel(out)
 
-    log("policy: the real finger is HID contact id %d; anything else is a "
-        "phantom. A press is released when it has been absent for %dms."
-        % (PRIMARY_ID, int(GRACE_MS)))
+    log("policy: a press begins on HID contact id %d and then follows whichever "
+        "block continues the trajectory within %d raw units per report; blocks "
+        "that do not are skipped, and a press is released when the tracked "
+        "contact has been absent for %dms."
+        % (PRIMARY_ID, panel.max_step, int(GRACE_MS)))
     if panel.guard:
         log("ghost guard: on - a press starting within %dms of the last report "
             "of the previous press, within %d raw units in X but %d or more in "
