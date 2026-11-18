@@ -10,6 +10,8 @@ Serves, on 127.0.0.1 only:
     GET /api/raw?since=N  {"seq": n, "reports": [...]} — reports after N
     GET /api/mark?x=&y=   record a tap position, paired with the nearest frame
     GET /api/marks        every recorded tap and its frame
+    GET /api/sample?...   record one follow-the-target sample
+    GET /api/samples      every follow-the-target sample
     GET /api/health       {"ok": true, "reports": n}
 
 Each report is {"seq", "t", "count", "contacts": [[id, x, y], ...]} read from
@@ -43,6 +45,7 @@ REPORT_LEN = CONTACT_COUNT_OFFSET + 1           # 53
 
 reports = collections.deque(maxlen=400)
 marks = collections.deque(maxlen=200)
+samples = collections.deque(maxlen=40000)
 seq = 0
 lock = threading.Lock()
 last_report_at = 0.0
@@ -115,6 +118,33 @@ class Handler(BaseHTTPRequestHandler):
                 current = seq
                 fresh = [r for r in reports if r["seq"] > since]
             body = json.dumps({"seq": current, "reports": fresh}).encode()
+            self._send(body, "application/json")
+            return
+
+        if url.path == "/api/sample":
+            query = parse_qs(url.query)
+            try:
+                sample = {
+                    "t": round(time.time() * 1000),
+                    "run": int(query["run"][0]),
+                    "tx": float(query["tx"][0]),
+                    "ty": float(query["ty"][0]),
+                    "px": float(query["px"][0]),
+                    "py": float(query["py"][0]),
+                }
+            except (KeyError, ValueError):
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            with lock:
+                samples.append(sample)
+            self._send(b'{"ok": true}', "application/json")
+            return
+
+        if url.path == "/api/samples":
+            with lock:
+                body = json.dumps({"samples": list(samples)}).encode()
             self._send(body, "application/json")
             return
 

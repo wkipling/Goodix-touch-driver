@@ -59,7 +59,7 @@
 <div class="hud top">
   <div>
     <h1>Touch test</h1>
-    <div class="sub" id="pointer-type">no input yet</div>
+    <div class="sub" id="pointer-type">press anywhere, then follow the ring</div>
   </div>
   <div class="readout">
     <div><b id="n-press">0</b><span>presses</span></div>
@@ -90,8 +90,14 @@
   var seq = 0;
   var pointer = null;          // {x, y, type}
   var pressStart = 0;
-  var lastPress = null;        // {ms, contacts}
   var counts = { press: 0, hold: 0, long: 0, raw: 0, ghost: 0 };
+
+  var T0 = performance.now();
+  /* run ids must be unique across page reloads, or samples from a reloaded
+     page collide with the previous load's runs */
+  var runSeq = Date.now();
+  var sampling = null;
+  var trail = [];
 
   function resize() {
     dpr = window.devicePixelRatio || 1;
@@ -144,6 +150,11 @@
     document.getElementById('pointer-type').textContent = describe(ev);
     fetch('/api/mark?x=' + Math.round(ev.clientX) + '&y=' + Math.round(ev.clientY))
       .catch(function () {});
+    /* only a press that starts on the ring begins a follow run, so ordinary
+       taps elsewhere do not fill the sample log with two-frame runs */
+    var tp = targetPos(performance.now());
+    var d = Math.sqrt(Math.pow(ev.clientX - tp.x, 2) + Math.pow(ev.clientY - tp.y, 2));
+    if (d < 150) startRun();
   });
 
   window.addEventListener('pointermove', function (ev) {
@@ -154,6 +165,7 @@
     if (!pressStart) return;
     var ms = performance.now() - pressStart;
     pressStart = 0;
+    stopRun();
     counts.press++;
     if (ms > 250) counts.hold++;
     if (ms > 1000) counts.long++;
@@ -273,7 +285,7 @@
       ctx.font = '15px ' + mono;
       ctx.fillStyle = '#3f4e5a';
       ctx.textAlign = 'center';
-      ctx.fillText('touch the panel', W / 2, H * 0.30);
+      ctx.fillText('press and follow the ring', W / 2, H * 0.30);
       ctx.textAlign = 'left';
       return;
     }
@@ -300,25 +312,67 @@
     ctx.fillText(Math.round(x) + ',' + Math.round(y), Math.min(x + 18, W - 90), Math.max(y + 20, 114));
   }
 
-  var TARGETS = [[0.10, 0.12], [0.90, 0.12], [0.10, 0.88], [0.90, 0.88], [0.50, 0.50]];
-  var LABELS = ['A', 'B', 'C', 'D', 'E'];
+  function targetPos(now) {
+    var t = (now - T0) / 1000;
+    var ax = W * 0.40, ay = H * 0.34;
+    return {
+      x: W / 2 + ax * Math.sin(2 * Math.PI * t / 12.0),
+      y: H / 2 + ay * Math.sin(2 * Math.PI * t / 40.0)
+    };
+  }
 
-  function targets() {
-    ctx.font = '13px ' + mono;
-    TARGETS.forEach(function (t, i) {
-      var x = t[0] * W, y = t[1] * H;
-      ctx.strokeStyle = 'rgba(223,232,239,.22)';
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(x, y, 26, 0, Math.PI * 2); ctx.stroke();
+  function startRun() {
+    if (sampling) return;
+    runSeq++;
+    trail = [];
+    sampling = setInterval(function () {
+      if (!pointer) return;
+      var tp = targetPos(performance.now());
+      fetch('/api/sample?run=' + runSeq +
+            '&tx=' + Math.round(tp.x) + '&ty=' + Math.round(tp.y) +
+            '&px=' + Math.round(pointer.x) + '&py=' + Math.round(pointer.y))
+        .catch(function () {});
+    }, 20);
+  }
+
+  function stopRun() {
+    if (sampling) { clearInterval(sampling); sampling = null; }
+  }
+
+  function follow() {
+    var now = performance.now();
+    var tp = targetPos(now);
+
+    if (pointer && pressStart) {
+      trail.push({ x: pointer.x, y: pointer.y, t: now });
+      for (var i = trail.length - 1; i >= 0; i--) {
+        if (now - trail[i].t > 2500) trail.splice(i, 1);
+      }
+      if (trail.length > 800) trail.splice(0, trail.length - 800);
+    }
+
+    if (trail.length > 1) {
       ctx.beginPath();
-      ctx.moveTo(x - 34, y); ctx.lineTo(x - 26, y);
-      ctx.moveTo(x + 26, y); ctx.lineTo(x + 34, y);
-      ctx.moveTo(x, y - 34); ctx.lineTo(x, y - 26);
-      ctx.moveTo(x, y + 26); ctx.lineTo(x, y + 34);
+      ctx.moveTo(trail[0].x, trail[0].y);
+      for (var j = 1; j < trail.length; j++) ctx.lineTo(trail[j].x, trail[j].y);
+      ctx.strokeStyle = 'rgba(255,107,122,.55)';
+      ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.fillStyle = 'rgba(223,232,239,.30)';
-      ctx.fillText(LABELS[i], x + 32, y - 30);
-    });
+    }
+
+    ctx.strokeStyle = 'rgba(242,181,60,.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(tp.x, tp.y, 34, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(242,181,60,.9)';
+    ctx.beginPath(); ctx.arc(tp.x, tp.y, 3, 0, Math.PI * 2); ctx.fill();
+
+    if (pointer && pressStart) {
+      var err = Math.sqrt(Math.pow(pointer.x - tp.x, 2) +
+                          Math.pow(pointer.y - tp.y, 2));
+      ctx.font = '13px ' + mono;
+      ctx.fillStyle = err > 60 ? 'rgba(255,107,122,.95)' : 'rgba(223,232,239,.6)';
+      ctx.fillText(Math.round(err) + ' px off', tp.x + 42, tp.y - 32);
+    }
   }
 
   function frame() {
@@ -328,7 +382,7 @@
     grid();
     columnBand();
     contacts();
-    targets();
+    follow();
     crosshair();
     requestAnimationFrame(frame);
   }
