@@ -409,3 +409,53 @@ The ghost guard's coverage limit from §9 is unchanged: it catches 2 of the 7
 ultra-short phantom presses in the captures. If wrong-cell taps persist, the
 next thing to widen is `TOUCH_GHOST_GAP_MS`, and the two surviving hypotheses
 are recorded under "The comparison point, and an unresolved ambiguity".
+
+## 12. The panel is identified: EHOMEWEI R13 Pro, a pen-and-touch panel
+
+The white-label EDID (`EMO` / `demoset-1`) never named the hardware, but the
+owner has now identified it and the vendor's published comparison table matches
+every measurement:
+
+| | vendor spec, R13 Pro | measured here |
+|---|---|---|
+| screen | 15.6", QLED, 3840x2400 | 344x196 mm active, 3840x2400 @ 60 |
+| **touch** | yes | Goodix `27c6:8191` |
+| **stylus** | yes | interface 0 descriptor carries stylus + keyboard collections |
+
+Two things follow that the earlier passes did not have.
+
+### 1. It is a pen panel, so pen/mode arbitration is in play
+
+This is not a finger-only digitizer. The controller runs stylus handling and
+therefore palm-rejection and pen-vs-finger arbitration, and interface 0's
+descriptor contains multitouch, stylus and keyboard in one collection. A
+controller that fabricates contacts at the *finger's* X with an arbitrary Y is
+consistent with palm/pen logic misfiring, not only with a broken finger
+tracker. That does not change anything measured, but it is the most plausible
+internal mechanism found so far.
+
+### 2. The vendor ships a touch-mode toggle, and we have never sent it
+
+EHOMEWEI's own Windows/Mac utility advertises "touch / stylus function
+switch" and "pressure detection" alongside brightness and rotation. So there is
+a vendor command that changes how this controller treats input, and it is not
+one of the commands tried in `FIRMWARE-LATCH.md` (InputMode 0/1/2, ContactMax).
+
+Caveat: the R13 Pro is **not** in the utility's supported model list
+(`RQ-173NU`, `RQ-173PU`, `RQHG-173NW`, `RQHG-173PW`, `ROG-160PQ`, `ROG-160NQ`),
+and EHOMEWEI state that only units whose rear label is black (`EHW01...`) work
+with it. So the app may refuse this unit.
+
+### What this opens up
+
+1. **Ask the vendor directly**, now that the product can be named: R13 Pro
+   touch firmware, and whether the touch/stylus switch applies to it. This is a
+   far more specific request than the generic one in `VENDOR-REQUEST.md`.
+2. **Get the utility and watch the wire.** If the Windows build can be obtained,
+   running it under Wine or in a VM while capturing `usbmon` would expose the
+   vendor protocol for touch mode — the discovery route that was blocked when no
+   vendor tool existed.
+3. **Power.** The unit is rated 18 W over USB-PD and the host exposes UCSI power
+   supplies. A touch controller running below its rated supply is a textbook
+   source of fabricated contacts, and it is cheap to rule out by powering the
+   panel from its own PD supply rather than the host port.
