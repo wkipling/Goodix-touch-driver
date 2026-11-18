@@ -105,6 +105,27 @@ TICK_SECS = 0.01
 NAME = "TOUCH TOUCH Filtered"
 DEBUG = os.environ.get("TOUCH_FILTER_DEBUG", "") not in ("", "0")
 
+# Ghost-press guard.  The panel sometimes emits two presses a few tens of
+# milliseconds apart, at the same X but different rows, which no hand can
+# produce: both instances in the captures land a tap in the wrong cell.  A
+# press that starts within GHOST_GAP_MS of the last report of the previous
+# press, in the same column (GHOST_DX) but a different row (GHOST_DY), is
+# dropped.  The gap is measured from when the finger was last seen, not from
+# the moment the release was emitted, because the latter is an artefact of the
+# grace period rather than a physical event.
+#
+# Replayed over five captures this drops 2 presses out of 131 - both of them
+# the impossible pairs already documented - and touches no legitimate tap.
+# The nearest legitimate press in the same column is 787 ms away, so the
+# threshold sits in an empty band (docs/FINDINGS-ADDENDUM.md, section 9).
+# It is a targeted filter, not a repair: the phantom is still in the stream,
+# and the latch is untouched.  Set TOUCH_GHOST_GUARD=0 to disable.
+GHOST_GUARD = os.environ.get("TOUCH_GHOST_GUARD", "1") not in (
+    "", "0", "no", "off")
+GHOST_GAP_MS = float(os.environ.get("TOUCH_GHOST_GAP_MS", "120"))
+GHOST_DX = int(os.environ.get("TOUCH_GHOST_DX", "120"))
+GHOST_DY = int(os.environ.get("TOUCH_GHOST_DY", "400"))
+
 # The by-id name is stable across re-enumeration; the capability scan is the
 # fallback for a machine whose by-id links have not been populated yet.
 SRC_HID = os.environ.get("TOUCH_HID", "")
@@ -287,7 +308,8 @@ class Emitter:
 class Panel:
     """Tracks which reported contact is the real finger."""
 
-    def __init__(self, out, grace_secs=None):
+    def __init__(self, out, grace_secs=None, ghost_guard=None,
+                 ghost_gap_ms=None, ghost_dx=None, ghost_dy=None):
         self.out = out
         self.grace_secs = (GRACE_MS / 1000.0) if grace_secs is None \
             else grace_secs
@@ -298,7 +320,35 @@ class Panel:
         self.solo_phantoms = 0
         self.unexpected_ids = set()
 
+        # ghost-press guard state
+        self.guard = GHOST_GUARD if ghost_guard is None else ghost_guard
+        self.guard_gap_ms = GHOST_GAP_MS if ghost_gap_ms is None \
+            else ghost_gap_ms
+        self.guard_dx = GHOST_DX if ghost_dx is None else ghost_dx
+        self.guard_dy = GHOST_DY if ghost_dy is None else ghost_dy
+        self.suppressed = False  # current gesture dropped by the guard
+        self.press_origin = None  # (x, y) where the current press began
+        self.last_press = None   # {t_end, x, y} of the last accepted press
+        self.ghost_presses = 0
+
+    def _is_ghost(self, x, y, now):
+        """True when a press has the shape of a phantom rather than a tap."""
+        if not self.guard or self.last_press is None:
+            return False
+        gap_ms = (now - self.last_press["t_end"]) * 1000.0
+        if gap_ms < 0 or gap_ms > self.guard_gap_ms:
+            return False
+        return (abs(x - self.last_press["x"]) <= self.guard_dx and
+                abs(y - self.last_press["y"]) >= self.guard_dy)
+
     def _release(self):
+        if self.current is not None and not self.suppressed and \
+                self.last_real is not None and self.press_origin is not None:
+            self.last_press = {"t_end": self.last_real,
+                               "x": self.press_origin[0],
+                               "y": self.press_origin[1]}
+        self.suppressed = False
+        self.press_origin = None
         self.out.release()
         self.current = None
         self.last_real = None
@@ -336,7 +386,19 @@ class Panel:
         cid, x, y = real[0]
         self.last_real = now
         if self.current is None:
+            if self._is_ghost(x, y, now):
+                self.suppressed = True
+                self.current = cid
+                self.press_origin = (x, y)
+                self.ghost_presses += 1
+                log("ghost press dropped (id %d at %d,%d, %.0f ms after the "
+                    "previous one, same column)"
+                    % (cid, x, y,
+                       (now - self.last_press["t_end"]) * 1000.0))
+                return
+            self.suppressed = False
             self.current = cid
+            self.press_origin = (x, y)
             self.presses += 1
             self.out.press(x, y)
             log("press %d (contact id %d at %d,%d)"
@@ -524,6 +586,13 @@ def main():
     log("policy: the real finger is HID contact id %d; anything else is a "
         "phantom. A press is released when it has been absent for %dms."
         % (PRIMARY_ID, int(GRACE_MS)))
+    if panel.guard:
+        log("ghost guard: on - a press starting within %dms of the last report "
+            "of the previous press, within %d raw units in X but %d or more in "
+            "Y, is dropped (TOUCH_GHOST_GUARD=0 disables)"
+            % (int(panel.guard_gap_ms), panel.guard_dx, panel.guard_dy))
+    else:
+        log("ghost guard: off")
     seen_lengths = set()
     late_check = time.monotonic() + 1.0
 

@@ -42,6 +42,13 @@ The previous Python shim read raw HID, which was the right layer, but:
 - **Releases on the real contact disappearing**, not on "no contacts": an
   explicit empty report releases immediately; absences are released after
   `TOUCH_GRACE_MS` (default 30 ms, far below the ~170 ms tap window).
+- **Drops a ghost press created by the firmware's phantom slots.** Phantoms
+  share the real finger's X and land at an unrelated Y, so a press that starts
+  within 120 ms of the previous press ending, in the same column but a different
+  row, is a phantom and is not reported. Measured over 131 captured presses it
+  drops the two impossible pairs and no legitimate tap; the nearest legitimate
+  same-column press is 787 ms away. See `docs/FINDINGS-ADDENDUM.md` §9 and
+  `probes/simulate-ghost-press-filter.py`.
 - **The noise floor is applied in-process.** `fuzz=80` is also written into
   the absinfo at creation (`UI_ABS_SETUP` does work), but Xorg opens the new
   device about 100 ms later and resets it to 0 - measured with
@@ -69,6 +76,7 @@ probes/probe-hidraw.py         read-only report recorder (Contact Count, ids)
 probes/probe-evdev.py          read-only driver-output recorder
 probes/cdp-record-touch.py     page pointer/HA action recorder
 probes/analyze-session.py      reconstruct gestures from the captures
+probes/simulate-ghost-press-filter.py  replay captures through the press rule
 probes/analyze-splits.py       find presses split by id-1 gaps
 probes/stuck-detector-sim.py   test candidate latch detectors
 probes/hold-reset-test.py      re-send the controller mode command on a hold
@@ -141,6 +149,12 @@ real contact. See `docs/FIRMWARE-LATCH.md`.
   ghost it after a lift. No driver can see the missing release; the only
   lever is to reset the controller state. No public firmware update exists for
   PID 8191 (see `docs/FIRMWARE-LATCH.md`).
+- The ghost-press guard is a filter over that firmware defect, not a repair:
+  the phantom stays in the stream and the driver only declines to report it as
+  a press. It also cannot help with the latch, which produces no second press
+  for the rule to compare against. It is deliberately narrow — same column,
+  different row, faster than a human double tap — and is disabled with
+  `TOUCH_GHOST_GUARD=0`.
 - The driver keeps `hid-multitouch` bound and grabs its evdev node rather
   than unbinding it. That preserves the stylus and keyboard nodes; the cost is
   that both drivers decode the reports.

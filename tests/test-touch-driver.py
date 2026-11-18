@@ -190,6 +190,56 @@ panel5.feed(dec(report([(1, True, 300, 300)])), now())
 panel5.feed(dec(report([])), now())
 check("released at once", out5.down is False)
 
+# --------------------------------------------------------------------------
+print("9. a press on the same column but another row, 53 ms later, is dropped")
+out6, panel6 = make()
+panel6.feed(dec(report([(1, True, 6240, 5575)])), now())
+check("first press accepted", out6.down is True)
+panel6.feed(dec(report([])), now())
+check("first press released", out6.down is False)
+advance(53)
+panel6.feed(dec(report([(1, True, 6286, 7791)])), now())
+check("ghost press suppressed", out6.down is False)
+check("ghost counted once", panel6.ghost_presses == 1, panel6.ghost_presses)
+check("only one press reported", panel6.presses == 1, panel6.presses)
+
+# --------------------------------------------------------------------------
+print("10. a fast second tap is kept unless it is the same column, other row")
+out7, panel7 = make()
+panel7.feed(dec(report([(1, True, 6240, 5575)])), now())
+panel7.feed(dec(report([])), now())
+advance(53)
+panel7.feed(dec(report([(1, True, 6286, 5900)])), now())   # dY 325 < 400
+check("nearby row kept", out7.down is True and panel7.presses == 2,
+      panel7.presses)
+
+out8, panel8 = make()
+panel8.feed(dec(report([(1, True, 6240, 5575)])), now())
+panel8.feed(dec(report([])), now())
+advance(53)
+panel8.feed(dec(report([(1, True, 9000, 9000)])), now())   # different column
+check("different column kept", out8.down is True and panel8.presses == 2,
+      panel8.presses)
+
+out9, panel9 = make()
+panel9.feed(dec(report([(1, True, 6240, 5575)])), now())
+panel9.feed(dec(report([])), now())
+advance(400)                                               # slow: a real tap
+panel9.feed(dec(report([(1, True, 6286, 7791)])), now())
+check("slow second tap kept", out9.down is True and panel9.presses == 2,
+      panel9.presses)
+
+# --------------------------------------------------------------------------
+print("11. the guard can be switched off")
+out10, panel10 = make()
+panel10.guard = False
+panel10.feed(dec(report([(1, True, 6240, 5575)])), now())
+panel10.feed(dec(report([])), now())
+advance(53)
+panel10.feed(dec(report([(1, True, 6286, 7791)])), now())
+check("guard off -> press accepted", out10.down is True)
+check("guard off -> none dropped", panel10.ghost_presses == 0)
+
 print()
 if failures:
     print("FAILURES: %s" % failures)
