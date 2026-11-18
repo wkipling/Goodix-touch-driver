@@ -91,6 +91,7 @@ probes/hold-reset-test.py      re-send the controller mode command on a hold
 probes/probe-who-zeroes.py     show that Xorg resets uinput absinfo
 probes/probe-uinput-fuzz.py    prove absinfo fuzz survives UI_ABS_SETUP
 docs/FIRMWARE-LATCH.md         root cause, evidence, device-level levers
+docs/VENDOR-UTILITY.md        the vendor's own tools, and why they are not the fix
 deploy/goodix-touch.service    systemd unit
 deploy/install.sh              install + switch + verify (auto-rollback)
 deploy/90-thunderbolt-no-d3hot.rules  keeps the TB3 bridges out of D3hot
@@ -180,6 +181,14 @@ mainline Linux has no `27c6:8191` quirk; the Microsoft Update Catalog has no
 entry for the hardware ID; the panel EDID is `EMO` / `Monitor` / `demoset-1`.
 A firmware image or tool would have to come from the panel vendor. Details in
 [`docs/FIRMWARE-LATCH.md`](docs/FIRMWARE-LATCH.md).
+
+The vendor's own downloadable tools were examined anyway, because that was the
+one place an image could still have been hiding:
+[`docs/VENDOR-UTILITY.md`](docs/VENDOR-UTILITY.md). `ISP.zip` is a WCH 8051
+programmer for the scaler side with an empty `firmware/` directory; the
+Windows/macOS app is a display-control utility that does speak HID and has a
+touch/stylus switch, but it does not support this model and ships no touch
+firmware.
 
 ## The USB link is not as solid as it looks
 

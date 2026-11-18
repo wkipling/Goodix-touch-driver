@@ -28,18 +28,30 @@ The EDID says white-label demo module, not a retail product, and no bus string
 identifies the brand. That means the request has to go to whoever supplied the
 monitor, with Goodix cc'd if that route exists.
 
+The panel is an **EHOMEWEI R13 Pro** (identified 2026-11-18). The vendor's own
+Windows and macOS utility is analysed in
+[`VENDOR-UTILITY.md`](VENDOR-UTILITY.md): it speaks HID to the monitor and
+advertises a touch/stylus switch, but it does not list this model, and no touch
+firmware image is published anywhere. The names behind the product, and the
+support address, are in that file.
+
 ## 2. What to ask for, in priority order
 
 1. **The firmware image for this module and the tool that flashes it.** State
-   the PID, the EDID string `demoset-1`, and the week/year.
+   the product name (R13 Pro), the PID, the EDID string `demoset-1`, and the
+   week/year.
 2. **The interface-1 command set** (or the updater's source), if they will not
    hand over a binary. That is enough to read the flash out ourselves — the
    Goodix family updater defines `Read(addr, buf, len)` alongside
    `Write(...)`, so a read path exists in the architecture even though this
    panel's model is not in the public tool.
-3. **The panel part number and whether a later firmware revision fixes stuck
+3. **Which touch firmware revision this panel should be running.** Nothing in
+   the device strings, the HID descriptor or the reports exposes a version, so
+   it is impossible to tell from the host whether the module is current. One
+   line from them settles it.
+4. **The panel part number and whether a later firmware revision fixes stuck
    contacts**, so a replacement module can be matched if no image appears.
-4. **An RMA or replacement** if none of the above is available. A module that
+5. **An RMA or replacement** if none of the above is available. A module that
    latches a contact for four seconds after a tap is defective, not quirky.
 
 Say plainly that the host is Linux 6.12 with stock `hid-multitouch`, that no
