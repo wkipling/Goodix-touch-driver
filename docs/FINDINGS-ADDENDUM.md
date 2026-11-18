@@ -192,6 +192,56 @@ Knobs: `TOUCH_GHOST_GUARD=0` disables the guard, `TOUCH_GHOST_GAP_MS`,
 `TOUCH_GHOST_DX` and `TOUCH_GHOST_DY` override the thresholds. The startup log
 prints the active policy.
 
+### Coverage: what the rule does not catch
+
+`probes/simulate-ghost-press-filter.py --blips` lists every press that lasted
+25 ms or less and never moved. A human tap on this panel is normally 50-150 ms
+and moves a little; a phantom is 2-3 report frames and is perfectly still. Over
+the five captures that set contains 7 presses:
+
+| capture | dur | gap to prev | dX | dY | at | rule |
+|---|---|---|---|---|---|---|
+| session 2 | 11 | 168 | 1249 | 1931 | (6569,5353) | reported |
+| session 2 | 10 | 273 | 329 | 222 | (6240,5575) | reported |
+| session 2 | 12 | 53 | 46 | 2216 | (6286,7791) | **dropped** |
+| session | 9 | 664 | 1549 | 1765 | (8994,8894) | reported |
+| session | 18 | 43 | 14 | 2877 | (8980,6017) | **dropped** |
+| mode 1 | 20 | 1931 | 6607 | 2341 | (9712,5087) | reported |
+| ContactMax=1 | 10 | 359 | 3552 | 1536 | (4414,8009) | reported |
+
+So the rule catches 2 of 7. The other 5 arrive 168-1931 ms after the previous
+press, outside the 120 ms window, and reach the page as presses. If the
+wrong-cell taps come from those, this filter does not address them.
+
+They cannot be caught by duration alone. The shortest press that is *not* a blip
+is 27 ms, so a 25 ms duration threshold has about 2 ms of margin — a very
+different proposition from the position rule's factor-of-14 margin, and a fast
+human tap would become a dead tap.
+
+### The comparison point, and an unresolved ambiguity
+
+The rule compares the new press against where the previous press *started*.
+Using where it *ended* would catch two more presses in the captures, and both
+follow a swipe (previous press 457 ms / moved 1326, and 431 ms / moved 233):
+
+```
+gap 74 ms  new press (8338,8451) dur 104  -> end drops, origin keeps
+gap 53 ms  new press (4186,6412) dur  50  -> end drops, origin keeps
+```
+
+Those are jumps of 1458 and 3011 raw units in 53-74 ms, which is faster than a
+hand and therefore probably a ghost. But the same shape is produced by an
+ordinary "swipe, then tap just below" gesture, and the captures cannot separate
+the two. Because a wrong suppression is a dead tap, the conservative base was
+kept. `--bases` reproduces the comparison, and `tests/test-touch-driver.py`
+pins the behaviour under the name "known limitation: tap right after a vertical
+drag is dropped".
+
+The observation that would settle it: **drag to scroll, then immediately tap
+something in the same column.** If that tap never fails, the origin base is
+fine and the two extra events were ghosts. If it does fail, the base — or the
+whole shape of the rule — needs rethinking.
+
 ## 10. The panel's USB link sits behind a Thunderbolt dock, and it dropped once
 
 At 16:30:34 on 2026-11-18 the kernel tore down the whole USB controller, not

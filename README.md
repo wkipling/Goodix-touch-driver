@@ -46,9 +46,11 @@ The previous Python shim read raw HID, which was the right layer, but:
   share the real finger's X and land at an unrelated Y, so a press that starts
   within 120 ms of the previous press ending, in the same column but a different
   row, is a phantom and is not reported. Measured over 131 captured presses it
-  drops the two impossible pairs and no legitimate tap; the nearest legitimate
-  same-column press is 787 ms away. See `docs/FINDINGS-ADDENDUM.md` §9 and
-  `probes/simulate-ghost-press-filter.py`.
+  the two impossible pairs and no legitimate tap; the nearest legitimate
+  same-column press is 787 ms away. It only covers ghosts that arrive within
+  120 ms of the previous press — 5 of the 7 ultra-short phantom presses in the
+  captures arrive later and are not caught. See `docs/FINDINGS-ADDENDUM.md` §9
+  and `probes/simulate-ghost-press-filter.py`.
 - **The noise floor is applied in-process.** `fuzz=80` is also written into
   the absinfo at creation (`UI_ABS_SETUP` does work), but Xorg opens the new
   device about 100 ms later and resets it to 0 - measured with

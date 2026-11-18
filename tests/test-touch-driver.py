@@ -72,13 +72,13 @@ def dec(payload):
     return gd.decode(payload)[0]
 
 
-def make():
+def make(**kwargs):
     out = gd.Emitter.__new__(gd.Emitter)
     out.ui = FakeUInput()
     out.tid = 0
     out.down = False
     out.sent = (None, None)
-    return out, gd.Panel(out)
+    return out, gd.Panel(out, **kwargs)
 
 
 def names(events, code):
@@ -239,6 +239,78 @@ advance(53)
 panel10.feed(dec(report([(1, True, 6286, 7791)])), now())
 check("guard off -> press accepted", out10.down is True)
 check("guard off -> none dropped", panel10.ghost_presses == 0)
+
+# --------------------------------------------------------------------------
+print("12. the thresholds are inclusive, and the drag case is a known limit")
+
+# gap: exactly at the threshold drops, one millisecond past keeps.  A 125 ms
+# threshold is used so the arithmetic is exact in binary floating point.
+out11, panel11 = make(ghost_gap_ms=125.0)
+panel11.feed(dec(report([(1, True, 6240, 5575)])), now())
+panel11.feed(dec(report([])), now())
+advance(125)
+panel11.feed(dec(report([(1, True, 6250, 8000)])), now())
+check("gap == threshold drops", out11.down is False and
+      panel11.ghost_presses == 1, panel11.ghost_presses)
+
+out12, panel12 = make(ghost_gap_ms=125.0)
+panel12.feed(dec(report([(1, True, 6240, 5575)])), now())
+panel12.feed(dec(report([])), now())
+advance(126)
+panel12.feed(dec(report([(1, True, 6250, 8000)])), now())
+check("gap > threshold keeps", out12.down is True and panel12.presses == 2,
+      panel12.presses)
+
+# dY: 400 exactly is a different row; 399 is the same row.
+out13, panel13 = make()
+panel13.feed(dec(report([(1, True, 6000, 5000)])), now())
+panel13.feed(dec(report([])), now())
+advance(50)
+panel13.feed(dec(report([(1, True, 6000, 5400)])), now())
+check("dY == 400 drops", out13.down is False and panel13.ghost_presses == 1,
+      panel13.ghost_presses)
+
+out14, panel14 = make()
+panel14.feed(dec(report([(1, True, 6000, 5000)])), now())
+panel14.feed(dec(report([])), now())
+advance(50)
+panel14.feed(dec(report([(1, True, 6000, 5399)])), now())
+check("dY == 399 keeps", out14.down is True and panel14.presses == 2,
+      panel14.presses)
+
+# dX: 120 exactly is the same column; 121 is not.
+out15, panel15 = make()
+panel15.feed(dec(report([(1, True, 6000, 5000)])), now())
+panel15.feed(dec(report([])), now())
+advance(50)
+panel15.feed(dec(report([(1, True, 6120, 5500)])), now())
+check("dX == 120 drops", out15.down is False and panel15.ghost_presses == 1,
+      panel15.ghost_presses)
+
+out16, panel16 = make()
+panel16.feed(dec(report([(1, True, 6000, 5000)])), now())
+panel16.feed(dec(report([])), now())
+advance(50)
+panel16.feed(dec(report([(1, True, 6121, 5500)])), now())
+check("dX == 121 keeps", out16.down is True and panel16.presses == 2,
+      panel16.presses)
+
+# Known limitation, deliberately left in place.  The reference is where the
+# previous press *started*, so a drag that ends far from its origin can make an
+# immediate follow-up tap look like a jump.  Comparing against the drag's end
+# instead suppresses two ordinary presses (104 ms and 50 ms, both just after a
+# swipe) in the captures, and the data cannot say which reading is right.  This
+# test pins the conservative behaviour so a future change has to be deliberate;
+# see the probe's --bases mode and docs/FINDINGS-ADDENDUM.md.
+out17, panel17 = make()
+panel17.feed(dec(report([(1, True, 6000, 1000)])), now())
+panel17.feed(dec(report([(1, True, 6000, 9000)])), now())   # drag to the bottom
+panel17.feed(dec(report([])), now())
+advance(50)
+panel17.feed(dec(report([(1, True, 6000, 8800)])), now())
+check("known limitation: tap right after a vertical drag is dropped",
+      out17.down is False and panel17.ghost_presses == 1,
+      (out17.down, panel17.ghost_presses))
 
 print()
 if failures:
