@@ -2,13 +2,16 @@
 """Watch the digitizer and the vendor mouse node at the same time.
 
 Usage:
-    probe-mouse-node.py [SECONDS]
+    probe-mouse-node.py [SECONDS] [DUMP_PATH]
 
 Prints, per node, how many bytes arrived and which report IDs were seen, plus
 the first raw frames.  It exists to test whether an InputMode change actually
 re-routes the controller: in mouse mode the digitizer may fall silent while
 interface 2 (report 0x07, three buttons and a wheel) wakes up.  If nothing
 changes on either node, the firmware is ignoring InputMode.
+
+With DUMP_PATH every interface-2 frame is appended there as "<t> <hex>", so
+the mouse coordinates can be decoded afterwards.
 """
 import os
 import select
@@ -16,6 +19,7 @@ import sys
 import time
 
 SECONDS = float(sys.argv[1]) if len(sys.argv) > 1 else 40.0
+DUMP = sys.argv[2] if len(sys.argv) > 2 else None
 NODES = ("/dev/hidraw0", "/dev/hidraw2")
 
 stats = {n: {"bytes": 0, "frames": 0, "ids": {}} for n in NODES}
@@ -29,6 +33,8 @@ for node in NODES:
         print("%s: %s" % (node, exc))
 
 end = time.time() + SECONDS
+start = time.time()
+dumpfh = open(DUMP, "a") if DUMP else None
 while time.time() < end and fds:
     ready, _, _ = select.select(list(fds), [], [], 0.5)
     for fd in ready:
@@ -42,6 +48,12 @@ while time.time() < end and fds:
         stats[node]["ids"][rid] = stats[node]["ids"].get(rid, 0) + 1
         if len(samples[node]) < 3:
             samples[node].append(data[:24].hex())
+        if dumpfh is not None and node == "/dev/hidraw2":
+            dumpfh.write("%.3f %s\n" % (time.time() - start, data.hex()))
+            dumpfh.flush()
+
+if dumpfh is not None:
+    dumpfh.close()
 
 print()
 for node in NODES:

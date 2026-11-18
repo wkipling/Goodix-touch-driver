@@ -240,12 +240,35 @@ column with an invented Y, and still with the same count laws. So the phantom
 generator is not "multitouch mode being selected", and InputMode is not a
 lever for this defect.
 
-Two limits on that conclusion. The latch itself did not occur in either run, so
-this says nothing about latch incidence — only that the frame structure is
-unchanged. And it is still open whether this firmware honours InputMode at all;
-the discriminator is mode 0, which should wake interface 2's mouse collection
-(report `0x07`) while the digitizer falls silent. `probes/mode0-check.sh` runs
-that test; it needs a person at the panel and has not been done yet.
+The latch itself did not occur in either run, so this says nothing about latch
+incidence — only about the frame structure.
+
+**Mode 0 settles whether InputMode is honoured at all, and it is not.** With
+InputMode=0 the digitizer still emitted report `0x0D`, still with two contacts
+sharing one X column and carrying different Y values:
+
+```
+0d 21 ec0b 790a 11 ec0b f61a ...    id 2 at x=3052 y=2681
+                                    id 1 at x=3052 y=6902
+```
+
+and interface 2 — the panel's own three-button mouse collection, report
+`0x07` — never emitted a single frame. Modes 0, 1 and 2 are indistinguishable.
+`probes/mode0-check.sh` reproduces it.
+
+#### Contact Count Maximum is inert too
+
+Feature `0x0A` (ContactMax) reads 10 and accepts a write without an ioctl
+error, but the device keeps reporting 10 and keeps emitting multi-contact
+frames: with the maximum set to 1, a 123-report capture still contained up to
+seven contacts per report, with 72% of reports multi-contact. The read-back on
+`0x0A` is honest (`0a 0a`), unlike `0x21`, which is how we know the value never
+changed. `probes/probe-contact-max.py` and `probes/contact-max-trial.sh` are the
+tools.
+
+Both documented configuration features are therefore dead ends. The controller
+cannot be reconfigured from the host, and the slot allocator that produces the
+phantoms cannot be switched off. That leaves levers 2–5.
 
 Recovery, if a mode leaves the panel silent: `probes/probe-input-mode.py 2`, or
 the re-enumeration used to clean up after these tests, which is reliable and
@@ -361,6 +384,9 @@ release.
 | `probes/mode-trial.sh` | set a mode, capture, restore (watchdog if the panel goes silent) |
 | `probes/mode-write-check.sh` | prove the mode write reaches the device, on usbmon |
 | `probes/mode0-check.sh` | mode-0 discriminator: does InputMode do anything at all |
+| `probes/probe-contact-max.py` | read or write Contact Count Maximum |
+| `probes/contact-max-trial.sh` | set ContactMax, capture, restore |
+| `probes/touch-test.html` | local 3x2 grid that shows tap and hold durations |
 | `probes/probe-mouse-node.py` | watch hidraw0 and hidraw2 together |
 | `probes/analyze-modes.py` | compare captures: contacts, column lock, count laws, spans |
 | `probes/probe-who-zeroes.py` | identify what resets uinput absinfo (Xorg) |

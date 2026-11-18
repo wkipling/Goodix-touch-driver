@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Touch test</title>
+<style>
+  :root {
+    --bg: #12151a;
+    --panel: #1b2028;
+    --line: #2a3240;
+    --text: #e6ebf2;
+    --dim: #8b97a8;
+    --tap: #3ddc84;
+    --hold: #ffb020;
+    --drag: #4aa3ff;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+               overflow: hidden; touch-action: none; user-select: none; }
+  body { display: flex; flex-direction: column; padding: 24px 28px; gap: 18px; }
+
+  header { display: flex; align-items: baseline; gap: 20px; }
+  h1 { font-size: 30px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .hint { color: var(--dim); font-size: 19px; }
+  .counts { margin-left: auto; display: flex; gap: 26px; font-variant-numeric: tabular-nums; }
+  .counts div { text-align: right; }
+  .counts b { display: block; font-size: 32px; font-weight: 600; line-height: 1; }
+  .counts span { font-size: 15px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+
+  main { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr);
+         grid-template-rows: repeat(2, 1fr); gap: 18px; min-height: 0; }
+
+  .cell { position: relative; background: var(--panel); border: 2px solid var(--line);
+          border-radius: 18px; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; gap: 10px; transition: border-color .12s, background .12s;
+          touch-action: none; overflow: hidden; }
+  .cell .label { font-size: 22px; color: var(--dim); letter-spacing: 0.04em; }
+  .cell .value { font-size: 44px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cell.active { border-color: var(--drag); background: #202836; }
+  .cell.tap { border-color: var(--tap); }
+  .cell.hold { border-color: var(--hold); background: #2a2418; }
+  .cell .bar { position: absolute; left: 0; bottom: 0; height: 6px; width: 0;
+               background: var(--hold); transition: width .05s linear; }
+
+  footer { display: flex; gap: 18px; align-items: baseline; }
+  .log { flex: 1; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 16px;
+         color: var(--dim); line-height: 1.5; height: 108px; overflow: hidden;
+         display: flex; flex-direction: column-reverse; }
+  .log div { white-space: nowrap; }
+  .log .k { color: var(--text); }
+  .meta { font-size: 16px; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Touch test</h1>
+  <span class="hint">tap a cell &mdash; a short tap is green, a long one turns amber</span>
+  <div class="counts">
+    <div><b id="c-tap">0</b><span>taps</span></div>
+    <div><b id="c-hold">0</b><span>holds</span></div>
+    <div><b id="c-long">0</b><span>over 1s</span></div>
+  </div>
+</header>
+
+<main id="grid">
+  <div class="cell"><span class="value">&nbsp;</span><span class="label">1</span><span class="bar"></span></div>
+  <div class="cell"><span class="value">&nbsp;</span><span class="label">2</span><span class="bar"></span></div>
+  <div class="cell"><span class="value">&nbsp;</span><span class="label">3</span><span class="bar"></span></div>
+  <div class="cell"><span class="value">&nbsp;</span><span class="label">4</span><span class="bar"></span></div>
+  <div class="cell"><span class="value">&nbsp;</span><span class="label">5</span><span class="bar"></span></div>
+  <div class="cell"><span class="value">&nbsp;</span><span class="label">6</span><span class="bar"></span></div>
+</main>
+
+<footer>
+  <div class="log" id="log"></div>
+  <div class="meta" id="meta">waiting</div>
+</footer>
+
+<script>
+(function () {
+  var TAP_MS = 250;
+  var counts = { tap: 0, hold: 0, long: 0 };
+  var log = document.getElementById('log');
+  var meta = document.getElementById('meta');
+  var active = null;
+
+  function now() { return performance.now(); }
+
+  function note(text) {
+    var row = document.createElement('div');
+    row.innerHTML = text;
+    log.insertBefore(row, log.firstChild);
+    while (log.childNodes.length > 9) log.removeChild(log.lastChild);
+  }
+
+  function start(cell) {
+    cell.classList.remove('tap', 'hold');
+    cell.classList.add('active');
+    var value = cell.querySelector('.value');
+    var bar = cell.querySelector('.bar');
+    var t0 = now();
+    value.textContent = '0 ms';
+    active = { cell: cell, t0: t0, value: value, bar: bar, timer: 0 };
+
+    (function tick() {
+      if (!active || active.t0 !== t0) return;
+      var ms = now() - t0;
+      value.textContent = Math.round(ms) + ' ms';
+      bar.style.width = Math.min(100, ms / 15) + '%';
+      active.timer = requestAnimationFrame(tick);
+    })();
+  }
+
+  function finish(cell, kind) {
+    if (!active || active.cell !== cell) return;
+    cancelAnimationFrame(active.timer);
+    var ms = now() - active.t0;
+    cell.classList.remove('active');
+    cell.querySelector('.bar').style.width = '0';
+
+    if (ms < TAP_MS) {
+      counts.tap++;
+      cell.classList.add('tap');
+    } else {
+      counts.hold++;
+      cell.classList.add('hold');
+      if (ms > 1000) counts.long++;
+    }
+    cell.querySelector('.value').textContent = Math.round(ms) + ' ms';
+    document.getElementById('c-tap').textContent = counts.tap;
+    document.getElementById('c-hold').textContent = counts.hold;
+    document.getElementById('c-long').textContent = counts.long;
+
+    note('<span class="k">' + kind + '</span> ' + Math.round(ms) + ' ms' +
+         ' &nbsp; x=' + Math.round(cell.dataset.x) + ' y=' + Math.round(cell.dataset.y));
+    active = null;
+  }
+
+  var cells = Array.prototype.slice.call(document.querySelectorAll('.cell'));
+  cells.forEach(function (cell, index) {
+    cell.dataset.x = 0;
+    cell.dataset.y = 0;
+
+    cell.addEventListener('pointerdown', function (ev) {
+      ev.preventDefault();
+      cell.dataset.x = ev.clientX;
+      cell.dataset.y = ev.clientY;
+      meta.textContent = 'pointerType=' + ev.pointerType + '  id=' + ev.pointerId;
+      if (active) finish(active.cell, 'cancel');
+      start(cell);
+    });
+
+    cell.addEventListener('pointerup', function (ev) {
+      ev.preventDefault();
+      finish(cell, ev.pointerType);
+    });
+
+    cell.addEventListener('pointercancel', function () { finish(cell, 'cancel'); });
+    cell.addEventListener('pointerleave', function () {
+      if (active && active.cell === cell) {
+        /* moving off a cell is a drag, not a release: report it as such */
+        finish(cell, 'drag-off');
+      }
+    });
+
+    cell.addEventListener('click', function (ev) { ev.preventDefault(); });
+  });
+
+  /* keep the last flash from lingering forever */
+  setInterval(function () {
+    cells.forEach(function (c) {
+      if (!c.classList.contains('active')) c.classList.remove('tap', 'hold');
+    });
+  }, 1200);
+})();
+</script>
+</body>
+</html>
