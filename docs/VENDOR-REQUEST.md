@@ -48,6 +48,10 @@ for a Linux driver.
 
 ## 3. Describe the defect in their terms
 
+Use the industry phrase **"ghost touch"** (or "phantom touch"). It is the
+term vendors, schools and panel manufacturers use for exactly this, and it
+gets a request recognised faster than a description of frames.
+
 Keep it concrete and measurable; it reads as a bug report rather than a
 complaint:
 
@@ -86,6 +90,22 @@ Procedure:
 If they will only give the Windows tool and no read-only mode, capture the
 update anyway: the write sequence implies the read sequence, and the tool
 almost always reads a version or a checksum block before flashing.
+
+## 4b. What public sources say (searched 2026-11-18)
+
+Nothing public describes this device or this exact fault, which is itself
+useful context for the request. What the search did turn up:
+
+| Source | Relevance |
+|---|---|
+| Dell: "Goodix Touch Panel Firmware Update Utility" | OEMs do ship *panel firmware* updates for Goodix parts, so asking for one is a normal request, not an unusual one. |
+| Reddit r/TopjoyFalcon, phantom/ghost touch thread | A vendor engineer's answer to the same symptom was to update the Goodix touch driver/firmware. Precedent that this class is fixed at the controller. |
+| Promethean ActivPanel "ghost touch" article | Panel makers publish ghost-touch troubleshooting as a known category: firmware, grounding, cable routing, ESD, interference. |
+| Microsoft Update Catalog, 23 Goodix entries for Windows 11 | All are 32–37 KB *driver* packages, not firmware payloads, and none matched this PID. No route to an image here. |
+| goodix/gdix_hid_firmware_update | Still no PID `8191`; see the table in `FIRMWARE-LATCH.md`. |
+
+Notably the top result for the fault description was this project's own
+`FIRMWARE-LATCH.md`, which suggests how little is published about this panel.
 
 ## 5. What happens with an image in hand
 
