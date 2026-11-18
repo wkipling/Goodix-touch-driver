@@ -191,3 +191,77 @@ further than that in X would be missed; none of the captured ones do (dX 14 and
 Knobs: `TOUCH_GHOST_GUARD=0` disables the guard, `TOUCH_GHOST_GAP_MS`,
 `TOUCH_GHOST_DX` and `TOUCH_GHOST_DY` override the thresholds. The startup log
 prints the active policy.
+
+## 10. The panel's USB link sits behind a Thunderbolt dock, and it dropped once
+
+At 16:30:34 on 2026-11-18 the kernel tore down the whole USB controller, not
+just the device:
+
+```
+usb 3-2: USB disconnect, device number 2
+usb 3-2.3: USB disconnect, device number 3
+xhci_hcd 0000:3c:00.0: remove, state 4
+usb usb4: USB disconnect, device number 1
+xhci_hcd 0000:3c:00.0: USB bus 4 deregistered
+usb usb3: USB disconnect, device number 1
+xhci_hcd 0000:3c:00.0: USB bus 3 deregistered
+pcieport 0000:07:00.0: Unable to change power state from D3hot to D0, device inaccessible
+pci_bus 0000:08: busn_res: [bus 08] is released
+pci_bus 0000:09: busn_res: [bus 09-3b] is released
+pci_bus 0000:3c: busn_res: [bus 3c] is released
+```
+
+Ten seconds later it came back and re-enumerated:
+
+```
+16:30:44 usb 3-2.3: New USB device found, idVendor=27c6, idProduct=8191
+16:30:44 hid-multitouch 0003:27C6:8191.0008: ... hidraw0
+```
+
+The controller is:
+
+```
+3c:00.0 USB controller [0c03]: Intel Corporation JHL6540 Thunderbolt 3 USB
+Controller (C step) [Alpine Ridge 4C 2016] [8086:15d4] (rev 02)
+```
+
+So the path is panel → generic USB2 hub (`1a40:0101`) → Thunderbolt 3 dock's
+xHCI → PCIe switch → host. The `D3hot → D0` failure on the bridge is a
+power-management/link failure in the dock path, not a panel event: the panel was
+never individually disconnected.
+
+**This is a separate fault from §5 and §9.** It removes touch entirely for the
+outage window, so any tap during it is lost — which is a candidate explanation
+for "the tap registered but nothing happened until I pressed again", but not for
+the ghosts or the latch, which appear in captures taken with no re-enumeration
+at all. It has happened **once this boot** (one `USB bus 3 deregistered`, one
+`D3hot` failure), so it is currently an observed one-off rather than a recurring
+fault. If it recurs it deserves its own investigation — dock power management,
+cable, or the host's TB controller.
+
+### The harness was lying about it
+
+The same event exposed a defect in `probes/touch-feed.py`. Its reader thread
+opened `/dev/hidraw0` once and did not catch the error:
+
+```
+Exception in thread Thread-1 (reader):
+OSError: [Errno 5] Input/output error
+  File ".../probes/touch-feed.py", line 62, in reader
+    data = os.read(fd, 64)
+```
+
+The HTTP thread kept running, so `/api/raw` and `/api/marks` returned frozen
+16:26 data and the page looked like a screen nobody was touching. The reader now:
+
+- finds the node by HID id in sysfs rather than assuming `/dev/hidraw0` (this
+  event moved the panel's sysfs id from `.0001` to `.0008`; the device node
+  number is not stable);
+- reopens on `OSError` with a 1 s backoff instead of dying;
+- and `/api/health` reports `link: {path, open, reconnects}`, so a dead feed is
+  visible rather than silent.
+
+Consequence for the record: **page-side measurements taken through `touch-feed`
+between 16:30 and 17:06 on 2026-11-18 have no ground truth** — the feed was dead
+for that window. The driver's own journal was unaffected, because the driver
+already had reconnect handling.

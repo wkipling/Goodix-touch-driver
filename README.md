@@ -168,6 +168,17 @@ entry for the hardware ID; the panel EDID is `EMO` / `Monitor` / `demoset-1`.
 A firmware image or tool would have to come from the panel vendor. Details in
 [`docs/FIRMWARE-LATCH.md`](docs/FIRMWARE-LATCH.md).
 
+## The USB link is not as solid as it looks
+
+The panel hangs off a Thunderbolt 3 dock: panel → USB2 hub → Intel JHL6540
+("Alpine Ridge") xHCI → PCIe switch → host. On 2026-11-18 one dock-side link
+drop removed the entire USB controller for ten seconds (`D3hot → D0` failure on
+the bridge), taking the panel with it. Touch is simply gone during such a
+window; the driver reconnects afterwards because it tracks the HID id rather
+than a node name. This is a separate fault from the firmware defects above and
+has been seen once. Details in
+[`docs/FINDINGS-ADDENDUM.md`](docs/FINDINGS-ADDENDUM.md) §10.
+
 ## Why not a kernel module
 
 A kernel HID driver is the natural long-term home for this, and the notes

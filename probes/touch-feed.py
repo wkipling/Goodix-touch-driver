@@ -22,6 +22,11 @@ becomes a pointer event is one the driver or the filter rejected.
 
 Read-only with respect to the panel.  Bounded ring buffer; nothing is written
 to disk.
+
+The reader reopens the node when the panel re-enumerates: a Thunderbolt/PCIe
+blip takes the whole USB controller away for a few seconds and the open fd
+starts returning EIO.  /api/health reports the link state so a feed that has
+died is not mistaken for a screen nobody is touching.
 """
 import collections
 import json
@@ -36,7 +41,9 @@ from urllib.parse import urlparse, parse_qs
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
 DOCROOT = sys.argv[2] if len(sys.argv) > 2 else "/tmp/touch-test"
 
-HID = "/dev/hidraw0"
+HID = "/dev/hidraw0"            # fallback; the node is not stable
+VENDOR = 0x27C6
+PRODUCT = 0x8191
 REPORT_ID = 0x0D
 FINGERS = 10
 BLOCK = 5
@@ -49,42 +56,96 @@ samples = collections.deque(maxlen=40000)
 seq = 0
 lock = threading.Lock()
 last_report_at = 0.0
+link = {"path": None, "open": False, "reconnects": 0}
+
+
+def find_hid():
+    """Return the /dev/hidrawN for this panel, matched by capability.
+
+    The node name is not stable: a USB or Thunderbolt re-enumeration re-creates
+    it and it can come back as a different number.  Matching the HID id in
+    sysfs is the same rule the driver uses.
+    """
+    want = "0003:0000%04X:0000%04X" % (VENDOR, PRODUCT)
+    try:
+        names = sorted(os.listdir("/sys/class/hidraw"))
+    except OSError:
+        return HID
+    for name in names:
+        try:
+            with open("/sys/class/hidraw/%s/device/uevent" % name) as fh:
+                for line in fh:
+                    if line.startswith("HID_ID=") and \
+                            line.strip().split("=", 1)[1].upper() == want:
+                        return "/dev/" + name
+        except OSError:
+            continue
+    return HID
 
 
 def reader():
+    """Read reports forever, reopening the node when the panel comes back.
+
+    This used to open once and let an exception kill the thread.  On
+    2026-11-18 a Thunderbolt/PCIe drop removed the USB controller for ten
+    seconds; the fd returned EIO, the thread died, and /api/raw and /api/marks
+    froze while the page kept serving happily.  A dead feed then looks exactly
+    like a screen nobody is touching.
+    """
     global seq, last_report_at
-    fd = os.open(HID, os.O_RDONLY)
-    try:
-        while True:
-            ready, _, _ = select.select([fd], [], [], 1.0)
-            if not ready:
-                continue
-            data = os.read(fd, 64)
-            if len(data) < 2 or data[0] != REPORT_ID:
-                continue
-            payload = data[1:]
-            if len(payload) < REPORT_LEN:
-                continue
-            contacts = []
-            for n in range(FINGERS):
-                b0 = payload[BLOCK * n]
-                if b0 & 0x01:
-                    contacts.append([
-                        (b0 >> 4) & 0x0F,
-                        payload[BLOCK * n + 1] | (payload[BLOCK * n + 2] << 8),
-                        payload[BLOCK * n + 3] | (payload[BLOCK * n + 4] << 8),
-                    ])
+    while True:
+        path = find_hid()
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError as exc:
+            print("touch-feed: cannot open %s (%s); retrying" % (path, exc),
+                  flush=True)
+            time.sleep(1.0)
+            continue
+        with lock:
+            link.update(path=path, open=True, reconnects=link["reconnects"] + 1)
+        print("touch-feed: reading %s" % path, flush=True)
+        try:
+            while True:
+                ready, _, _ = select.select([fd], [], [], 1.0)
+                if not ready:
+                    continue
+                data = os.read(fd, 64)
+                if len(data) < 2 or data[0] != REPORT_ID:
+                    continue
+                payload = data[1:]
+                if len(payload) < REPORT_LEN:
+                    continue
+                contacts = []
+                for n in range(FINGERS):
+                    b0 = payload[BLOCK * n]
+                    if b0 & 0x01:
+                        contacts.append([
+                            (b0 >> 4) & 0x0F,
+                            payload[BLOCK * n + 1] | (payload[BLOCK * n + 2] << 8),
+                            payload[BLOCK * n + 3] | (payload[BLOCK * n + 4] << 8),
+                        ])
+                with lock:
+                    seq += 1
+                    reports.append({
+                        "seq": seq,
+                        "t": round(time.time() * 1000),
+                        "count": payload[CONTACT_COUNT_OFFSET],
+                        "contacts": contacts,
+                    })
+                    last_report_at = time.time()
+        except OSError as exc:
+            # EIO/ENODEV: the panel went away under us.  Reopen and carry on.
+            print("touch-feed: lost %s (%s); reopening" % (path, exc),
+                  flush=True)
+        finally:
             with lock:
-                seq += 1
-                reports.append({
-                    "seq": seq,
-                    "t": round(time.time() * 1000),
-                    "count": payload[CONTACT_COUNT_OFFSET],
-                    "contacts": contacts,
-                })
-                last_report_at = time.time()
-    finally:
-        os.close(fd)
+                link["open"] = False
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        time.sleep(1.0)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -190,6 +251,7 @@ class Handler(BaseHTTPRequestHandler):
                     "seq": seq,
                     "age_ms": round((time.time() - last_report_at) * 1000)
                     if last_report_at else None,
+                    "link": dict(link),
                 }).encode()
             self._send(body, "application/json")
             return
@@ -204,7 +266,7 @@ def main():
     thread.start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("serving %s on http://127.0.0.1:%d/ (raw feed from %s)"
-          % (DOCROOT, PORT, HID))
+          % (DOCROOT, PORT, find_hid()), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
