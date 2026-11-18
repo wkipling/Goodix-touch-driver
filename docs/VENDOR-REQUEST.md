@@ -91,7 +91,7 @@ If they will only give the Windows tool and no read-only mode, capture the
 update anyway: the write sequence implies the read sequence, and the tool
 almost always reads a version or a checksum block before flashing.
 
-## 4b. What public sources say (searched 2026-11-18)
+## 5. What public sources say (searched 2026-11-18)
 
 Nothing public describes this device or this exact fault, which is itself
 useful context for the request. What the search did turn up:
@@ -107,7 +107,7 @@ useful context for the request. What the search did turn up:
 Notably the top result for the fault description was this project's own
 `FIRMWARE-LATCH.md`, which suggests how little is published about this panel.
 
-## 5. What happens with an image in hand
+## 6. What happens with an image in hand
 
 The analysis is ordinary binary work, and the target inside the image is
 narrow:
@@ -123,7 +123,7 @@ for us. Without an image, the two cheap device-level experiments in
 [`FIRMWARE-LATCH.md`](FIRMWARE-LATCH.md) §8 — input mode, and noise/power/
 grounding — are the only remaining probes that do not involve guessing.
 
-## 6. Safety notes
+## 7. Safety notes
 
 - Do not flash the kiosk's only panel with an unverified image. If a second
   identical module can be bought cheaply, flash that first.
