@@ -102,6 +102,45 @@ Windows app is `1.0.0.135`, extracted binary
 `5089d641b3d777a29a9fd9896adfc54b3699ccab5746834ce2f7adad5191b7f4`,
 which matches the copy analysed above.
 
+## Attempted: running it under Wine (2026-11-18)
+
+The app was run against the real panel on the kiosk under Wine 10.0 (Debian 13,
+`wine32` on i386 multiarch). This does not need a Windows machine: Wine's
+`winebus` reaches `hidraw` directly. Everything below was observed.
+
+- **The app starts and renders.** The earlier WebView2 risk was wrong:
+  `DisplayController.exe` does not import `WebView2Loader.dll` at all — that
+  DLL is a leftover in the install tree. The real imports are `HID.DLL`,
+  `SETUPAPI.DLL`, `CFGMGR32.DLL` and `mfc140u.dll`, and nothing
+  browser-shaped.
+- **Wine enumerates the panel correctly.** `udev_add_device` logs
+  `vid 27c6, pid 8191, version 0100, input 0/1/2, is_hidraw 1` for
+  `/dev/hidraw0`, `/dev/hidraw1` and `/dev/hidraw2`.
+- **The app opens all three nodes `O_RDWR`** and reads each descriptor
+  (`HIDIOCGRDESCSIZE`, `HIDIOCGRDESC`). So it holds the vendor channel —
+  `hidraw1`, page `0xFF00`, report 2 out — open and writable.
+- **It then sends nothing.** Zero writes and zero feature reports to any hidraw
+  node: not at startup, and not after visiting every pane.
+- **The "Monitor control" pane renders empty.** That is where the control is:
+  the binary carries `Touch function`, `Touch Set`, `Stylus set`,
+  `Touch supported` and `supportTouch %d`, and `res/` carries
+  `icon_touch@2x.png` and `icon_stylus@2x.png` with highlight variants.
+- **Nothing touched `SOFTWARE\Microsoft\Wisp\Pen\Digimon`** either, so whether
+  the switch is a HID report or a registry write is still open. The code path
+  simply never ran.
+
+**The gate is the app's own recognition of the monitor, not the transport.**
+Wine is not a short cut past an unsupported model: the R13 Pro is absent from
+the supported-model list and the utility behaves accordingly, holding the
+device open while offering no control for it.
+
+What the run does establish is that the hidraw path works end to end, so the
+command is capturable the moment the control appears — on native Windows, or
+with a supported unit. Use
+`strace -f -y -s 256 -e trace=openat,write,ioctl`: the `-y` option annotates each
+fd with its `/dev/hidrawN` path, which is enough to read the report bytes
+without decoding `usbmon`.
+
 ## What is blocked, and the two ways round it
 
 Full decompilation was attempted with Ghidra 12.1.4 and abandoned: import plus
@@ -113,13 +152,14 @@ CLI would work.
 Before spending more on static work, the cheaper decisive experiment is
 **runtime**:
 
-1. Run `EHome_Wei_Setup.exe` on a Windows machine (or under Wine) with the panel
-   attached, and capture `usbmon` while toggling the touch/stylus switch. If the
+1. Run `EHome_Wei_Setup.exe` on a real Windows machine with the panel attached,
+   and capture the HID traffic while toggling the touch/stylus switch. If the
    toggle produces a HID output or feature report, that *is* the vendor command
-   and no decompilation is needed. Risk: the app ships `WebView2Loader.dll`, so
-   it may require the Edge WebView2 runtime and refuse to start under Wine.
+   and no decompilation is needed. Wine does not get there: the control does not
+   appear for this panel (see above).
 2. Otherwise, decompile with a client deadline that allows it, and look for the
-   `supportTouch` format string's callers.
+   `supportTouch` format string's callers — now with the extra question of what
+   condition gates the `Touch function` control.
 
 Either way the ask to EHOMEWEI is now specific enough to be worth sending:
 R13 Pro, touch/stylus switch, and whether a touch firmware image exists.
