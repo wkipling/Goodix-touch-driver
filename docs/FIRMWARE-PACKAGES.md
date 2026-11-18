@@ -73,6 +73,46 @@ Three things follow.
    vendor usage page alone, not on product id, so it will happily offer to flash
    a panel it was not built for.
 
+## The matched driver cannot talk to this panel
+
+Analysed 2026-11-18. `tpupdate_driver.dll` imports exactly one way to send
+anything to the device, and it is feature reports:
+
+| DLL | Function | Role |
+|---|---|---|
+| `HID.DLL` | `HidD_GetHidGuid`, `SetupDi*` (SETUPAPI) | enumerate HID collections |
+| `HID.DLL` | `HidP_GetCaps` | read the collection's caps |
+| `HID.DLL` | **`HidD_SetFeature`** | **the only command path** |
+| `KERNEL32` | `CreateFileA/W`, `ReadFile` | open the collection, read input reports |
+
+There is no `WriteFile` and no `HidD_SetOutputReport`, so every command it sends
+is a feature report. Its strings describe that flow: `send read report cmd`,
+`read report status failed`, `checksum is invalid:0x%02x`, and per-chip
+`disable report` sequences.
+
+This panel's vendor collection declares no feature reports at all:
+
+```
+06 00 ff 09 01 a1 01 85 01 09 01 75 08 95 3f 81 02 85 02 09 ff 75 08 95 3f 91 02 c0
+             ^input report 1 (63 bytes)      ^output report 2 (63 bytes)
+```
+
+One `0x81` item, one `0x91` item, and no `0xb1` feature item anywhere.
+
+So the INF matches on usage page and usage only, which sibling panels share,
+and the payload plus driver behind it cannot drive *this* collection. Three
+consequences:
+
+1. **Installing that package would not update this panel.** It would fail at
+   `HidD_SetFeature`, which is why the match alone is not a fix.
+2. **This panel's vendor channel is output-report based** — report 2 in, report
+   1 out. That is why the earlier GTX5-framed attempt wrote to endpoint `0x02`:
+   the right direction, wrong framing.
+3. **The vendor question is now specific.** Not "is there an update" but: a
+   7863-family module whose `FF00`/`0001` collection exposes only input report 1
+   and output report 2, with no feature reports — which package and which
+   command framing applies to it?
+
 ## Next step
 
 Analyse `tpupdate_driver.dll` to recover the command framing, then use a
