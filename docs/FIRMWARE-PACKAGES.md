@@ -90,6 +90,23 @@ is a feature report. Its strings describe that flow: `send read report cmd`,
 `read report status failed`, `checksum is invalid:0x%02x`, and per-chip
 `disable report` sequences.
 
+Disassembly of the one `HidD_SetFeature` call site confirms the shape:
+
+```asm
+movslq %edx,%rdi          ; rdi = len
+xor    %edx,%edx
+lea    0x20(%rsp),%rcx
+lea    0x41(%rdx),%r8d    ; memset(local, 0, 0x41)   -> 65-byte buffer
+cmp    $0x41,%edi         ; len > 65 -> "Write len error. writelen = %d."
+...
+call   0x180008e5e        ; HidD_SetFeature(handle, buf, len)
+```
+
+A 65-byte feature report — report ID plus 64 bytes of payload, the same shape as
+the Linux updater's `0x0e`/`0x0b` protocol. So the Windows package and the Linux
+repository share a transport design, and both differ from this panel's
+interrupt-report channel.
+
 This panel's vendor collection declares no feature reports at all:
 
 ```
