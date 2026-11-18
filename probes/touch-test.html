@@ -6,174 +6,309 @@
 <title>Touch test</title>
 <style>
   :root {
-    --bg: #12151a;
-    --panel: #1b2028;
-    --line: #2a3240;
-    --text: #e6ebf2;
-    --dim: #8b97a8;
-    --tap: #3ddc84;
-    --hold: #ffb020;
-    --drag: #4aa3ff;
+    --ink: #0c1014;
+    --grid: #172027;
+    --rule: #26323c;
+    --paper: #dfe8ef;
+    --mute: #6f808f;
+    --real: #f2b53c;
+    --ghost: #46c2d0;
+    --pointer: #ff6b7a;
+    --mono: "DejaVu Sans Mono", ui-monospace, Menlo, monospace;
+    --sans: "DejaVu Sans", system-ui, sans-serif;
   }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-               font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-               overflow: hidden; touch-action: none; user-select: none; }
-  body { display: flex; flex-direction: column; padding: 24px 28px; gap: 18px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ink);
+               color: var(--paper); font-family: var(--sans);
+               touch-action: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  canvas { position: fixed; inset: 0; display: block; }
 
-  header { display: flex; align-items: baseline; gap: 20px; }
-  h1 { font-size: 30px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-  .hint { color: var(--dim); font-size: 19px; }
-  .counts { margin-left: auto; display: flex; gap: 26px; font-variant-numeric: tabular-nums; }
-  .counts div { text-align: right; }
-  .counts b { display: block; font-size: 32px; font-weight: 600; line-height: 1; }
-  .counts span { font-size: 15px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+  .hud { position: fixed; left: 0; right: 0; z-index: 2;
+         display: flex; align-items: baseline; gap: 28px;
+         padding: 14px 22px; pointer-events: none;
+         background: linear-gradient(to bottom, rgba(12,16,20,.92), rgba(12,16,20,0)); }
+  .top { top: 0; }
+  .bottom { bottom: 0; background: linear-gradient(to top, rgba(12,16,20,.94), rgba(12,16,20,0));
+            flex-direction: column; align-items: stretch; gap: 8px; padding-bottom: 16px; }
 
-  main { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr);
-         grid-template-rows: repeat(2, 1fr); gap: 18px; min-height: 0; }
+  h1 { font-size: 19px; font-weight: 600; margin: 0; letter-spacing: .01em; }
+  .sub { color: var(--mute); font-size: 14px; }
 
-  .cell { position: relative; background: var(--panel); border: 2px solid var(--line);
-          border-radius: 18px; display: flex; flex-direction: column; align-items: center;
-          justify-content: center; gap: 10px; transition: border-color .12s, background .12s;
-          touch-action: none; overflow: hidden; }
-  .cell .label { font-size: 22px; color: var(--dim); letter-spacing: 0.04em; }
-  .cell .value { font-size: 44px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .cell.active { border-color: var(--drag); background: #202836; }
-  .cell.tap { border-color: var(--tap); }
-  .cell.hold { border-color: var(--hold); background: #2a2418; }
-  .cell .bar { position: absolute; left: 0; bottom: 0; height: 6px; width: 0;
-               background: var(--hold); transition: width .05s linear; }
+  .readout { margin-left: auto; display: flex; gap: 30px; font-family: var(--mono); }
+  .readout div { text-align: right; }
+  .readout b { display: block; font-size: 24px; font-weight: 600; line-height: 1.05;
+               font-variant-numeric: tabular-nums; }
+  .readout span { font-size: 11px; color: var(--mute); }
 
-  footer { display: flex; gap: 18px; align-items: baseline; }
-  .log { flex: 1; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 16px;
-         color: var(--dim); line-height: 1.5; height: 108px; overflow: hidden;
-         display: flex; flex-direction: column-reverse; }
-  .log div { white-space: nowrap; }
-  .log .k { color: var(--text); }
-  .meta { font-size: 16px; color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+  .legend { display: flex; gap: 26px; font-size: 13px; color: var(--mute); flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 7px;
+              vertical-align: 0; border-radius: 50%; }
+  .legend .k { color: var(--paper); }
+
+  .log { font-family: var(--mono); font-size: 12.5px; color: var(--mute);
+         display: flex; gap: 22px; overflow: hidden; height: 18px; white-space: nowrap; }
+  .log b { color: var(--paper); font-weight: 500; }
+  .log .t { color: var(--real); }
+  .log .g { color: var(--ghost); }
+  .log .p { color: var(--pointer); }
 </style>
 </head>
 <body>
-<header>
-  <h1>Touch test</h1>
-  <span class="hint">tap a cell &mdash; a short tap is green, a long one turns amber</span>
-  <div class="counts">
-    <div><b id="c-tap">0</b><span>taps</span></div>
-    <div><b id="c-hold">0</b><span>holds</span></div>
-    <div><b id="c-long">0</b><span>over 1s</span></div>
+<canvas id="c"></canvas>
+
+<div class="hud top">
+  <div>
+    <h1>Touch test</h1>
+    <div class="sub" id="pointer-type">no input yet</div>
   </div>
-</header>
+  <div class="readout">
+    <div><b id="n-press">0</b><span>presses</span></div>
+    <div><b id="n-hold">0</b><span>over 250 ms</span></div>
+    <div><b id="n-long">0</b><span>over 1 s</span></div>
+    <div><b id="n-raw">0</b><span>raw contacts</span></div>
+    <div><b id="n-ghost">0</b><span>extra contacts</span></div>
+  </div>
+</div>
 
-<main id="grid">
-  <div class="cell"><span class="value">&nbsp;</span><span class="label">1</span><span class="bar"></span></div>
-  <div class="cell"><span class="value">&nbsp;</span><span class="label">2</span><span class="bar"></span></div>
-  <div class="cell"><span class="value">&nbsp;</span><span class="label">3</span><span class="bar"></span></div>
-  <div class="cell"><span class="value">&nbsp;</span><span class="label">4</span><span class="bar"></span></div>
-  <div class="cell"><span class="value">&nbsp;</span><span class="label">5</span><span class="bar"></span></div>
-  <div class="cell"><span class="value">&nbsp;</span><span class="label">6</span><span class="bar"></span></div>
-</main>
-
-<footer>
+<div class="hud bottom">
+  <div class="legend">
+    <span><i style="background: var(--real)"></i><span class="k">contact id 1</span> &mdash; the finger the driver uses</span>
+    <span><i style="background: var(--ghost)"></i><span class="k">extra contacts</span> &mdash; same frame, invented Y</span>
+    <span><i style="background: var(--pointer)"></i><span class="k">what the page received</span></span>
+  </div>
   <div class="log" id="log"></div>
-  <div class="meta" id="meta">waiting</div>
-</footer>
+</div>
 
 <script>
 (function () {
-  var TAP_MS = 250;
-  var counts = { tap: 0, hold: 0, long: 0 };
-  var log = document.getElementById('log');
-  var meta = document.getElementById('meta');
-  var active = null;
+  var W = 0, H = 0, dpr = 1;
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var RAW_W = 16383, RAW_H = 9599;
 
-  function now() { return performance.now(); }
+  var reports = [];            // raw frames from the feed
+  var seq = 0;
+  var pointer = null;          // {x, y, type}
+  var pressStart = 0;
+  var lastPress = null;        // {ms, contacts}
+  var counts = { press: 0, hold: 0, long: 0, raw: 0, ghost: 0 };
 
-  function note(text) {
-    var row = document.createElement('div');
-    row.innerHTML = text;
-    log.insertBefore(row, log.firstChild);
-    while (log.childNodes.length > 9) log.removeChild(log.lastChild);
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var mono = "'DejaVu Sans Mono', monospace";
+
+  /* ---- raw feed ------------------------------------------------------- */
+  function poll() {
+    fetch('/api/raw?since=' + seq, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var first = seq === 0;
+        seq = data.seq;
+        var now = Date.now();
+        data.reports.forEach(function (rep) { rep.at = now; reports.push(rep); });
+        if (!first) {
+          data.reports.forEach(function (r) {
+            counts.raw += r.contacts.length;
+            counts.ghost += Math.max(0, r.contacts.length - 1);
+          });
+          document.getElementById('n-raw').textContent = counts.raw;
+          document.getElementById('n-ghost').textContent = counts.ghost;
+        }
+        if (reports.length > 400) reports = reports.slice(-400);
+      })
+      .catch(function () { /* feed restarting: ignore */ });
+  }
+  setInterval(poll, 80);
+  poll();
+
+  /* ---- input ---------------------------------------------------------- */
+  function describe(ev) {
+    return 'pointerType ' + ev.pointerType + '  ·  id ' + ev.pointerId;
   }
 
-  function start(cell) {
-    cell.classList.remove('tap', 'hold');
-    cell.classList.add('active');
-    var value = cell.querySelector('.value');
-    var bar = cell.querySelector('.bar');
-    var t0 = now();
-    value.textContent = '0 ms';
-    active = { cell: cell, t0: t0, value: value, bar: bar, timer: 0 };
-
-    (function tick() {
-      if (!active || active.t0 !== t0) return;
-      var ms = now() - t0;
-      value.textContent = Math.round(ms) + ' ms';
-      bar.style.width = Math.min(100, ms / 15) + '%';
-      active.timer = requestAnimationFrame(tick);
-    })();
-  }
-
-  function finish(cell, kind) {
-    if (!active || active.cell !== cell) return;
-    cancelAnimationFrame(active.timer);
-    var ms = now() - active.t0;
-    cell.classList.remove('active');
-    cell.querySelector('.bar').style.width = '0';
-
-    if (ms < TAP_MS) {
-      counts.tap++;
-      cell.classList.add('tap');
-    } else {
-      counts.hold++;
-      cell.classList.add('hold');
-      if (ms > 1000) counts.long++;
-    }
-    cell.querySelector('.value').textContent = Math.round(ms) + ' ms';
-    document.getElementById('c-tap').textContent = counts.tap;
-    document.getElementById('c-hold').textContent = counts.hold;
-    document.getElementById('c-long').textContent = counts.long;
-
-    note('<span class="k">' + kind + '</span> ' + Math.round(ms) + ' ms' +
-         ' &nbsp; x=' + Math.round(cell.dataset.x) + ' y=' + Math.round(cell.dataset.y));
-    active = null;
-  }
-
-  var cells = Array.prototype.slice.call(document.querySelectorAll('.cell'));
-  cells.forEach(function (cell, index) {
-    cell.dataset.x = 0;
-    cell.dataset.y = 0;
-
-    cell.addEventListener('pointerdown', function (ev) {
-      ev.preventDefault();
-      cell.dataset.x = ev.clientX;
-      cell.dataset.y = ev.clientY;
-      meta.textContent = 'pointerType=' + ev.pointerType + '  id=' + ev.pointerId;
-      if (active) finish(active.cell, 'cancel');
-      start(cell);
-    });
-
-    cell.addEventListener('pointerup', function (ev) {
-      ev.preventDefault();
-      finish(cell, ev.pointerType);
-    });
-
-    cell.addEventListener('pointercancel', function () { finish(cell, 'cancel'); });
-    cell.addEventListener('pointerleave', function () {
-      if (active && active.cell === cell) {
-        /* moving off a cell is a drag, not a release: report it as such */
-        finish(cell, 'drag-off');
-      }
-    });
-
-    cell.addEventListener('click', function (ev) { ev.preventDefault(); });
+  window.addEventListener('pointerdown', function (ev) {
+    if (ev.target.closest && ev.target.closest('.hud')) return;
+    pointer = { x: ev.clientX, y: ev.clientY, type: ev.pointerType };
+    pressStart = performance.now();
+    document.getElementById('pointer-type').textContent = describe(ev);
   });
 
-  /* keep the last flash from lingering forever */
-  setInterval(function () {
-    cells.forEach(function (c) {
-      if (!c.classList.contains('active')) c.classList.remove('tap', 'hold');
+  window.addEventListener('pointermove', function (ev) {
+    pointer = { x: ev.clientX, y: ev.clientY, type: ev.pointerType };
+  });
+
+  function endPress(ev, kind) {
+    if (!pressStart) return;
+    var ms = performance.now() - pressStart;
+    pressStart = 0;
+    counts.press++;
+    if (ms > 250) counts.hold++;
+    if (ms > 1000) counts.long++;
+    document.getElementById('n-press').textContent = counts.press;
+    document.getElementById('n-hold').textContent = counts.hold;
+    document.getElementById('n-long').textContent = counts.long;
+    note(kind, ms, ev);
+  }
+  window.addEventListener('pointerup', function (ev) { endPress(ev, 'release'); });
+  window.addEventListener('pointercancel', function (ev) { endPress(ev, 'cancel'); });
+
+  var logEl = document.getElementById('log');
+  function note(kind, ms, ev) {
+    var nearest = latestContacts();
+    var neighbours = nearest.length ? nearest.length : 0;
+    var raw = pointer ? toRaw(pointer.x, pointer.y) : { x: 0, y: 0 };
+    var cls = ms > 250 ? ' class="t"' : ' class="p"';
+    var row = document.createElement('span');
+    row.innerHTML = '<b' + cls + '>' + Math.round(ms) + ' ms</b> ' + kind +
+      ' &nbsp;<b>' + raw.x + ',' + raw.y + '</b>' +
+      ' &nbsp;raw contacts ' + neighbours;
+    logEl.appendChild(row);
+    while (logEl.childNodes.length > 4) logEl.removeChild(logEl.firstChild);
+  }
+
+  function toRaw(x, y) {
+    return { x: Math.round(x / W * RAW_W), y: Math.round(y / H * RAW_H) };
+  }
+  function toCss(rx, ry) {
+    return { x: rx / RAW_W * W, y: ry / RAW_H * H };
+  }
+
+  function latestContacts() {
+    for (var i = reports.length - 1; i >= 0; i--) {
+      if (reports[i].contacts.length) return reports[i].contacts;
+    }
+    return [];
+  }
+
+  /* ---- drawing -------------------------------------------------------- */
+  function grid() {
+    ctx.lineWidth = 1;
+    for (var x = 0; x <= W; x += 100) {
+      ctx.strokeStyle = (x % 500 === 0) ? '#26323c' : '#172027';
+      ctx.beginPath(); ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, H); ctx.stroke();
+    }
+    for (var y = 0; y <= H; y += 100) {
+      ctx.strokeStyle = (y % 500 === 0) ? '#26323c' : '#172027';
+      ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(W, y + .5); ctx.stroke();
+    }
+    ctx.strokeStyle = '#2f3d48';
+    ctx.beginPath(); ctx.moveTo(0, H * 0.5 + .5); ctx.lineTo(W, H * 0.5 + .5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W / 3 + .5, 0); ctx.lineTo(W / 3 + .5, H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(2 * W / 3 + .5, 0); ctx.lineTo(2 * W / 3 + .5, H); ctx.stroke();
+
+    ctx.font = '11px ' + mono;
+    ctx.fillStyle = '#4a5a68';
+    for (var rx = 0; rx <= RAW_W; rx += 2048) {
+      var px = rx / RAW_W * W;
+      ctx.fillText(String(rx), Math.min(px + 4, W - 34), H - 58);
+    }
+    for (var ry = 0; ry <= RAW_H; ry += 1200) {
+      var py = ry / RAW_H * H;
+      ctx.fillText(String(ry), 6, Math.min(py + 12, H - 70));
+    }
+  }
+
+  function columnBand() {
+    var now = Date.now();
+    for (var i = reports.length - 1; i >= 0; i--) {
+      var rep = reports[i];
+      if (now - rep.at > 400) break;
+      var real = rep.contacts.filter(function (c) { return c[0] === 1; })[0];
+      if (!real) continue;
+      var cx = toCss(real[1], real[2]).x;
+      var grad = ctx.createLinearGradient(cx - 90, 0, cx + 90, 0);
+      grad.addColorStop(0, 'rgba(242,181,60,0)');
+      grad.addColorStop(.5, 'rgba(242,181,60,.10)');
+      grad.addColorStop(1, 'rgba(242,181,60,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(cx - 90, 0, 180, H);
+      break;
+    }
+  }
+
+  function contacts() {
+    var now = Date.now();
+    reports.forEach(function (rep) {
+      var age = now - rep.at;
+      if (age > 700) return;
+      rep.contacts.forEach(function (c) {
+        var p = toCss(c[1], c[2]);
+        var fade = Math.max(0, 1 - age / 700);
+        if (c[0] === 1) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(242,181,60,' + (0.20 + 0.65 * fade) + ')';
+          ctx.fill();
+        } else {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 13, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(70,194,208,' + (0.15 + 0.75 * fade) + ')';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          if (fade > 0.5) {
+            ctx.font = '11px ' + mono;
+            ctx.fillStyle = 'rgba(70,194,208,' + fade + ')';
+            ctx.fillText(String(c[0]), p.x + 17, p.y + 4);
+          }
+        }
+      });
     });
-  }, 1200);
+  }
+
+  function crosshair() {
+    if (!pointer) {
+      ctx.font = '15px ' + mono;
+      ctx.fillStyle = '#3f4e5a';
+      ctx.textAlign = 'center';
+      ctx.fillText('touch the panel', W / 2, H * 0.30);
+      ctx.textAlign = 'left';
+      return;
+    }
+    var x = pointer.x, y = pointer.y;
+    ctx.strokeStyle = 'rgba(255,107,122,.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(W, y + .5); ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255,107,122,.95)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x - 14, y); ctx.lineTo(x - 5, y);
+    ctx.moveTo(x + 5, y); ctx.lineTo(x + 14, y);
+    ctx.moveTo(x, y - 14); ctx.lineTo(x, y - 5);
+    ctx.moveTo(x, y + 5); ctx.lineTo(x, y + 14);
+    ctx.stroke();
+
+    var raw = toRaw(x, y);
+    ctx.font = '12px ' + mono;
+    ctx.fillStyle = 'rgba(255,107,122,.95)';
+    ctx.fillText(raw.x + ',' + raw.y, Math.min(x + 18, W - 120), Math.max(y - 12, 96));
+    ctx.fillStyle = 'rgba(255,107,122,.55)';
+    ctx.fillText(Math.round(x) + ',' + Math.round(y), Math.min(x + 18, W - 90), Math.max(y + 20, 114));
+  }
+
+  function frame() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0c1014';
+    ctx.fillRect(0, 0, W, H);
+    grid();
+    columnBand();
+    contacts();
+    crosshair();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
 })();
 </script>
 </body>
