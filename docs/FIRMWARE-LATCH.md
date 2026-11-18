@@ -293,6 +293,11 @@ Three routes, in order of realism:
 3. **Nothing else.** The USB device descriptor carries no firmware version, so
    even identifying which image would apply needs the vendor.
 
+The request itself — the identifying facts to quote, what to ask for, how to
+describe the defect in the vendor's terms, and how to capture their tool's
+protocol instead of guessing at it — is in
+[`VENDOR-REQUEST.md`](VENDOR-REQUEST.md).
+
 With bytes in hand the workflow is unchanged from any other binary: open the
 image, locate the report-fill routine (it writes the 5-byte blocks, the constant
 `0x0101` Scan Time and the count byte), and look at the slot-clear path on
