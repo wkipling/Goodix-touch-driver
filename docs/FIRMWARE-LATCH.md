@@ -256,9 +256,14 @@ sudo sh -c 'echo 0 > /sys/bus/usb/devices/3-2.3/authorized'
 sudo sh -c 'echo 1 > /sys/bus/usb/devices/3-2.3/authorized'
 ```
 
-`hid-multitouch` rebinds, re-sends InputMode=2 itself, and this driver
-reattaches without intervention (verified: fresh HID instances, driver pid
-unchanged).
+`hid-multitouch` rebinds and re-sends InputMode=2 itself. This driver used to
+*not* survive it: node discovery pinned the HID instance name
+(`0003:27C6:8191.0001`), which is renumbered to `.0005` on re-enumeration, so
+the driver sat in "waiting for the raw HID node to appear" with touch dead
+until it was restarted. Discovery now matches `HID_ID` plus `HID_PHYS`
+ending in `/input0`, which is stable across resets, suspends and replugs.
+Anyone resetting the panel on an older build should restart
+`goodix-touch.service` afterwards.
 
 One useful side effect: `GET_REPORT` of feature `0x21` is answered by the
 *device* with its last input report — `usbmon` shows `a1 01 0321` completing

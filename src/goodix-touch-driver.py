@@ -79,7 +79,12 @@ from evdev import AbsInfo, InputDevice, InputEvent, UInput, ecodes as e
 # Device and report geometry (measured, see docs/GOODIX-TOUCH-DRIVER-NOTES.md)
 # ---------------------------------------------------------------------------
 VENDOR, PRODUCT = 0x27C6, 0x8191
-HID_INTERFACE = "0003:27c6:8191.0001"
+# Identity of the multitouch interface, by USB identity and interface number.
+# The HID instance name ("0003:27C6:8191.0001") carries a suffix that is
+# renumbered on every re-enumeration, so matching on it leaves the driver
+# waiting for a node that cannot come back after a USB reset, suspend or replug.
+HID_ID = "0003:%08X:%08X" % (VENDOR, PRODUCT)
+HID_PHYS_SUFFIX = "/input0"
 
 REPORT_ID = 0x0D
 FINGERS = 10
@@ -372,15 +377,35 @@ def _has_abs(path, code):
     return bool(mask >> code & 1)
 
 
+def _uevent(device):
+    try:
+        with open(os.path.join(device, "uevent")) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def find_hidraw():
-    """The hidraw node behind the multitouch interface."""
+    """The hidraw node behind the multitouch interface.
+
+    Selected by USB identity and interface number, not by the HID instance
+    name: that name is renumbered on every re-enumeration, so pinning it makes
+    the driver wait forever after a USB reset, suspend or replug.
+    """
     if SRC_HID:
         return SRC_HID
     for entry in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
-        target = os.path.basename(os.path.realpath(
-            os.path.join(entry, "device")))
-        if target.lower() == HID_INTERFACE:
-            return "/dev/" + os.path.basename(entry)
+        device = os.path.join(entry, "device")
+        text = _uevent(device)
+        if ("HID_ID=" + HID_ID) not in text:
+            continue
+        phys = ""
+        for line in text.splitlines():
+            if line.startswith("HID_PHYS="):
+                phys = line[len("HID_PHYS="):].strip()
+        if not phys.endswith(HID_PHYS_SUFFIX):
+            continue
+        return "/dev/" + os.path.basename(entry)
     return None
 
 
