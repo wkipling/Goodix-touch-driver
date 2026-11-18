@@ -135,6 +135,21 @@ GHOST_DY = int(os.environ.get("TOUCH_GHOST_DY", "400"))
 # gesture lifecycle that this driver was missing.  0 disables it.
 STUCK_MS = float(os.environ.get("TOUCH_STUCK_MS", "5000"))
 
+# How far the tracked contact may move between two reports, in raw units.
+# This is the test for "is this block the same physical contact I was already
+# tracking", and it is the one field the firmware cannot fake: every tipped
+# block in a report shares nearly the same X (one column, several Y peaks) and
+# the fabricated blocks jump by thousands of units every report, which no
+# finger can do in 10 ms.
+#
+# Measured over 1479 captured reports: the real contact's step is p50 1-8,
+# p99 147-213, max 364 raw units.  A report that has lost the real block puts
+# its *nearest* candidate at 410 or more, and the alternatives are typically
+# 1500+.  400 therefore sits in an empty gap.  Overshooting it is benign: a
+# step larger than this is skipped, not followed, so the worst case is one
+# frame of held position rather than a jump.
+MAX_STEP = int(os.environ.get("TOUCH_MAX_STEP", "400"))
+
 # The by-id name is stable across re-enumeration; the capability scan is the
 # fallback for a machine whose by-id links have not been populated yet.
 SRC_HID = os.environ.get("TOUCH_HID", "")
@@ -319,7 +334,7 @@ class Panel:
 
     def __init__(self, out, grace_secs=None, ghost_guard=None,
                  ghost_gap_ms=None, ghost_dx=None, ghost_dy=None,
-                 stuck_secs=None):
+                 stuck_secs=None, max_step=None):
         self.out = out
         self.grace_secs = (GRACE_MS / 1000.0) if grace_secs is None \
             else grace_secs
@@ -348,6 +363,42 @@ class Panel:
         self.last_move = None    # monotonic time the position last changed
         self.stuck_presses = 0
         self.stuck_id = None     # contact id released as frozen; ignore till it lifts
+
+        # Continuity gate: the furthest the tracked contact may move between
+        # two reports and still be considered the same physical contact.
+        self.max_step = MAX_STEP if max_step is None else max_step
+
+    def _select(self, contacts):
+        """Return the block that continues the contact being tracked, or None.
+
+        The firmware's contact id is not used to decide.  Ids are recycled
+        within a gesture and a phantom can carry id 1, so they identify a slot
+        rather than a finger.  What the firmware cannot fake is motion: every
+        tipped block in a report shares nearly the same X, and only the real
+        one continues the trajectory the finger was already following.  See
+        MAX_STEP for the measured separation.
+        """
+        best = min(contacts,
+                   key=lambda c: max(abs(c[1] - self.last_pos[0]),
+                                     abs(c[2] - self.last_pos[1])))
+        step = max(abs(best[1] - self.last_pos[0]),
+                   abs(best[2] - self.last_pos[1]))
+        if step > self.max_step:
+            return None
+        return best
+
+    def _no_continuation(self, contacts, now):
+        """No block in this report continues the press, or may start one."""
+        self.phantom_frames += 1
+        if len(contacts) == 1:
+            self.solo_phantoms += 1
+            self.unexpected_ids.add(contacts[0][0])
+        debug("  no continuing contact in %s" % (contacts,))
+        if self.current is not None and \
+                (now - self.last_real) >= self.grace_secs:
+            debug("  real contact absent for %dms -> release"
+                  % int((now - self.last_real) * 1000))
+            self._release()
 
     def _is_ghost(self, x, y, now):
         """True when a press has the shape of a phantom rather than a tap."""
@@ -392,31 +443,34 @@ class Panel:
             self.stuck_id = None
             return
 
-        real = [c for c in contacts if c[0] == PRIMARY_ID]
+        if self.stuck_id is not None and \
+                any(c[0] == self.stuck_id for c in contacts):
+            # The contact released as frozen is still asserting itself.  Ignore
+            # it until it actually lifts, or the press/release cycle never ends.
+            # Refreshing last_real is part of that: it is what stops tick() from
+            # treating the contact as gone and clearing the hold-off.
+            self.last_real = now
+            contacts = [c for c in contacts if c[0] != self.stuck_id]
+            if not contacts:
+                debug("  frozen contact %d still asserting" % self.stuck_id)
+                return
 
-        if not real:
-            # Only phantoms in this report.  This is also how a tap usually
-            # ends - the finger lifts and a phantom lingers - but it can
-            # happen for a frame or two while the finger is genuinely down,
-            # so absence has to persist briefly before the press is dropped.
-            self.phantom_frames += 1
-            if len(contacts) == 1:
-                self.solo_phantoms += 1
-                self.unexpected_ids.add(contacts[0][0])
-            debug("  phantom-only report %s" % (contacts,))
-            if self.current is not None and \
-                    (now - self.last_real) >= self.grace_secs:
-                debug("  id 1 absent for %dms -> release"
-                      % int((now - self.last_real) * 1000))
-                self._release()
-            return
+        if self.current is None:
+            # A press may only begin on the firmware's own id 1: a solo
+            # phantom (id 5 and friends) must never start one.
+            start = [c for c in contacts if c[0] == PRIMARY_ID]
+            if not start:
+                self._no_continuation(contacts, now)
+                return
+            cid, x, y = start[0]
+        else:
+            chosen = self._select(contacts)
+            if chosen is None:
+                self._no_continuation(contacts, now)
+                return
+            cid, x, y = chosen
 
-        cid, x, y = real[0]
         self.last_real = now
-        if self.current is None and self.stuck_id is not None and \
-                cid == self.stuck_id:
-            debug("  ignoring frozen contact %d until it lifts" % cid)
-            return
         if self.current is None:
             if self._is_ghost(x, y, now):
                 self.suppressed = True

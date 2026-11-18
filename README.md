@@ -35,8 +35,20 @@ The previous Python shim read raw HID, which was the right layer, but:
 
 - **All ten blocks**, decoded tolerantly. A short report is decoded as far as
   it goes instead of killing touch.
-- **Trusts HID contact id 1** as the real finger (198/198 solo real reports,
-  every multi-contact report); solo phantoms (id 5) never start a press.
+- **Follows the contact that continues the trajectory, not the contact id.**
+  Every tipped block in a report carries the same X column and differs only in
+  Y, so the blocks are competing answers for *one* finger — the controller
+  reports several Y peaks from a single X. The firmware's 4-bit Contact
+  Identifier does not identify the finger: ids are recycled within a gesture and
+  a phantom can arrive carrying id 1. What the firmware cannot fake is motion.
+  A finger cannot move 400 raw units in a 10 ms report, while the fabricated
+  blocks jump by thousands every report, so the driver takes the block nearest
+  the position it is already tracking and skips the frame if nothing is near
+  (`MAX_STEP`). Replayed over both captures this removes **all 11 impossible Y
+  teleports** (worst jump 2567 → 338 raw units, total |dY| 6805 → 1784 and
+  10284 → 5191) and drops six phantom presses, while emitted X motion is
+  unchanged. A press may still only *begin* on id 1, so a solo phantom never
+  starts one.
   Caveat: the firmware can also latch or ghost id 1 after a real lift; see
   `docs/FIRMWARE-LATCH.md`. That failure is not recoverable downstream.
 - **Releases on the real contact disappearing**, not on "no contacts": an
@@ -49,8 +61,11 @@ The previous Python shim read raw HID, which was the right layer, but:
   the two impossible pairs and no legitimate tap; the nearest legitimate
   same-column press is 787 ms away. It only covers ghosts that arrive within
   120 ms of the previous press — 5 of the 7 ultra-short phantom presses in the
-  captures arrive later and are not caught. See `docs/FINDINGS-ADDENDUM.md` §9
-  and `probes/simulate-ghost-press-filter.py`.
+  captures arrive later and are not caught. The continuity rule above now
+  rejects those too, because a ghost press that begins in another row is also
+  not a continuation of the tracked position; the guard is kept as a second,
+  independent check on press *starts*. See `docs/FINDINGS-ADDENDUM.md` §9 and
+  `probes/simulate-ghost-press-filter.py`.
 - **Releases a frozen contact.** The firmware can hold id 1 asserted while
   sending byte-identical frames; the contact keeps being reported, so the
   30 ms absence grace never arms and the press would never end. A press that

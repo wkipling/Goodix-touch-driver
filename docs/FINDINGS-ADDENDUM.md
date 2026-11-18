@@ -459,3 +459,86 @@ with it. So the app may refuse this unit.
    supplies. A touch controller running below its rated supply is a textbook
    source of fabricated contacts, and it is cheap to rule out by powering the
    panel from its own PD supply rather than the host port.
+
+## 13. What a report actually contains, and why continuity is the real test
+
+The suspicion that the driver was reasoning at the wrong level was worth
+checking, and the report descriptor settles it. `hidraw0`'s descriptor declares
+report `0x0D` as a Digitizer / Touch Screen application with ten `Finger`
+logical collections, each exactly **5 bytes**:
+
+```
+1 bit  Tip Switch
+3 bits padding (constant)
+4 bits Contact Identifier      <-- the byte the driver reads as (b0 >> 4) & 0x0F
+16 bits X, logical 0..0x3FFF
+16 bits Y, logical 0..0x257F
+```
+
+then, after the ten blocks, Scan Time (16 bits) and Contact Count (8 bits).
+There is **no In-Range and no Confidence bit** on the touch report — only Tip,
+Identifier, X and Y. So there is no field in which the firmware admits a contact
+is bad, and no validity flag to filter on. Report `0x06` on the same interface
+is the stylus (tip, barrel, eraser, invert, in-range, pressure, tilt), and
+`0x09` is the keyboard; neither carries the finger blocks.
+
+That layout makes the fault legible. In a frame with several tipped blocks:
+
+- every block carries the **same X**, within a median of 9-23 raw units
+  (p99 under 320, i.e. under a millimetre of a 344 mm panel) — so they are not
+  independent fingers, they are several answers to "where is the finger";
+- the Y values differ by hundreds to thousands of units, and the set of Ys
+  changes every report;
+- **no two blocks ever share a contact id** (0 of 608 multi-contact frames), so
+  the firmware is allocating a fresh slot for each invented peak rather than
+  duplicating a block. The ids therefore identify a slot in this report, not a
+  finger across reports, which is why "trust id 1" is a coincidence and not a
+  model.
+
+The field that does survive across reports is velocity, because a finger is a
+physical object. Measured per report over 1,479 reports in the two captures:
+
+| quantity | value |
+|---|---|
+| real contact's step, p50 | 1-8 raw units |
+| real contact's step, p99 | 147-213 |
+| real contact's step, max | 364 |
+| nearest candidate when the real block is absent | 410 or more |
+| the *second* nearest candidate, typically | 1,500-1,900 |
+
+So 400 raw units per report separates "the finger moved" from "the finger's
+block is missing and this is a peak 20x further away". The driver now takes the
+block nearest the position it is already tracking and, if nothing is within
+`MAX_STEP`, skips the frame instead of jumping. A press still only begins on
+id 1, so a solo phantom cannot start one.
+
+Measured by replaying both captures through the real `Panel`/`Emitter` code
+(`probes/simulate-continuity-tracker.py`, before = the id-1-only driver at
+`621bd8b`, after = this change):
+
+| capture | before | after |
+|---|---|---|
+| session 1, emitted Y steps > 400 | 5, worst 2,567 | **0, worst 338** |
+| session 1, total \|dY\| | 6,805 | 1,784 |
+| session 1, total \|dX\| | 2,632 | 2,632 |
+| session 2, emitted Y steps > 400 | 6, worst 1,113 | **0, worst 384** |
+| session 2, total \|dY\| | 10,284 | 5,191 |
+| session 2, total \|dX\| | 46,288 | 49,643 |
+
+X motion is preserved to within the extra frames now tracked, and every
+impossible Y teleport is gone. The change also drops six presses, and they are
+the ones that should be dropped: five in session 2 land inside 1.2 s at
+scattered positions (7,008/6,977 → 8,338/8,451 → 8,093/8,009 → 6,569/5,353 →
+6,240/5,575) while the finger is mid-drag, and the sixth in session 1 is the
+textbook shape — id 1 disappears at Y 3,410 and reappears at X 4,186 / Y 6,412,
+same column and a different row. The old driver turned all six into taps.
+
+This is still a filter over a firmware defect, but it is a filter over a
+measured physical invariant rather than over a guessed screen geometry, and it
+explains the earlier result that nearest-neighbour tracking "hopped onto
+phantoms": that experiment matched a new position to the nearest *previous*
+contact, which lets a peak at a similar Y capture the track. Matching the *same*
+contact forward, with a velocity gate, is the well-conditioned direction.
+
+`probes/analyze-contact-ids.py` produces the per-capture statistics above and is
+the tool to re-run if the firmware ever changes.

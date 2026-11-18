@@ -375,6 +375,56 @@ check("disabled: never released", out21.down is True)
 check("disabled: none counted", panel21.stuck_presses == 0)
 
 print()
+print("14. continuity decides which block is the finger")
+
+# The firmware cannot fake motion.  Every tipped block in a report shares
+# nearly the same X, and the fabricated ones teleport by thousands of units
+# between two 10 ms reports.  A press therefore follows the block that
+# continues the trajectory, not the firmware's contact id.
+out22, panel22 = make()
+panel22.feed(dec(report([(1, True, 6000, 6000)])), now())
+check("press begins on id 1", out22.down is True and panel22.presses == 1)
+advance(10)
+panel22.feed(dec(report([(1, True, 6005, 6005), (2, True, 6002, 9000)])),
+              now())
+check("column-sharing phantom does not move the pointer",
+      panel22.last_pos == (6005, 6005), panel22.last_pos)
+
+# id 1 itself can teleport - the firmware moves it to a bogus row and back.
+# The block that continues the path wins even when it is not id 1.
+out23, panel23 = make()
+panel23.feed(dec(report([(1, True, 6000, 6000)])), now())
+advance(10)
+panel23.feed(dec(report([(1, True, 6000, 9500), (3, True, 6300, 6100)])),
+              now())
+check("an id-1 teleport loses to the continuing block",
+      panel23.last_pos == (6300, 6100), panel23.last_pos)
+
+# When nothing in the report is near the trajectory, the real block is absent:
+# skip the frame rather than jump, keep the press alive for the grace period,
+# then release.
+out24, panel24 = make()
+panel24.feed(dec(report([(1, True, 6000, 6000)])), now())
+out24.ui.events.clear()
+advance(10)
+panel24.feed(dec(report([(1, True, 6000, 9500)])), now())
+check("a teleport is skipped, not followed",
+      panel24.last_pos == (6000, 6000), panel24.last_pos)
+check("nothing emitted for the skipped frame", out24.ui.events == [],
+      out24.ui.events)
+check("still down inside the grace period", out24.down is True)
+for _ in range(4):
+    advance(10)
+    panel24.feed(dec(report([(1, True, 6000, 9500)])), now())
+check("released once the real block stays absent", out24.down is False)
+
+# The start gate is unchanged: a solo phantom must never begin a press.
+out25, panel25 = make()
+panel25.feed(dec(report([(5, True, 4000, 4000)])), now())
+check("a solo phantom still starts nothing",
+      out25.down is False and panel25.presses == 0)
+
+print()
 if failures:
     print("FAILURES: %s" % failures)
     sys.exit(1)
