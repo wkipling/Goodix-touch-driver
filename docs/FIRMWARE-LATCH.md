@@ -26,7 +26,8 @@ grows. The driver is delivering a held press, not failing to release one.
 | The raw-to-screen mapping is exact: X `10.67·css`, Y `9.99·css`, residual 3 raw units | 13 calibration taps at five known targets | observed |
 | The latch is a frozen slot followed by a smooth oscillation | Two 3–4 s spans | observed |
 | The USB link and power are clean | 46 h of dmesg, no errors or resets | observed |
-| Slots are not invalidated on release | Inferring from the above | **inference** |
+| Phantom Y values are fresh, not copies: 66–75% unique, 0–2% near the real Y | 633 phantoms over three captures | observed |
+| The controller fabricates slots: live X inherited, Y arbitrary | Inferring from the above | **inference** |
 
 ## 1. The wire format, from the device's own descriptor
 
@@ -172,28 +173,48 @@ px). The motion has three phases:
 A real finger produces jagged deltas with no such regularity; this is a value
 being recomputed from a signal that is slowly wandering.
 
-## 6. What the defect is
+## 6. What fabricates the phantoms
 
-**Inference.** The evidence above is consistent with one mechanism: the
-firmware never invalidates a slot on release, and its Contact Count comes from
-the tracker rather than from the slots it managed to fill.
+Last revised after measuring the phantom values directly. The earlier wording
+blamed a stale Y register; the data does not support that, and the correction
+is recorded here rather than quietly dropped.
 
-- A slot that should be cleared keeps its last X and a stale Y, and because the
-  frame writer still copies the live finger's global X into every active block,
-  the phantom appears in the right column with a wrong row.
-- A Y register that holds `0xFFFF` or `0` clamps to 9599 or 0, which is exactly
-  where the pinning shows up.
-- Count > tipped is the tracker knowing about slots the frame cannot express.
-- The latch is the same failure with the finger gone: the last Y is retained and
-  X is recomputed from a decaying signal, so it wanders instead of clearing.
+**Measured.** Across three captures (633 phantoms):
 
-What would falsify it: a raw capture showing that phantom blocks carry X bytes
-that are *not* shared with the live contact, or a Contact Count that ever falls
-below the tipped count. The first needs a raw dump (the analysed sessions kept
-decoded values only), the second is settled at 0 violations in 1587 reports.
+| Property | Result |
+|---|---|
+| X compared with the live contact | shared, median spread 15–29 raw units (1.5–3 px) |
+| Y compared with the live contact | never close: 0% within 120 units in two captures, 2% in the third |
+| Distinct phantom Y values | 66–75% unique — not a small set of stale or repeated values |
+| Phantom duplicating the real contact exactly | 0 and 2, in 633 |
+| Most repeated Y values | `9599` (11×), `1`, and a few mid-range values (6–8×) |
+| Contact Count | never below the tipped count; `+1` in 12–14% of reports |
 
-What it is *not*: a host decoding error, a missing report, or dropped frames.
-Every observed report is 54 bytes and the count laws hold across both sessions.
+**What that rules out.**
+
+- *Stale or copied positions.* Phantom Y values are mostly fresh, and never sit
+  near the real contact's Y, so they are not a previous position replayed.
+- *Panel or electrical noise.* Noise would disturb X as readily as Y, but X is
+  the live column in essentially every phantom. Interference does not know which
+  axis to leave alone.
+
+**What it supports (inference).** The controller fabricates slot entries rather
+than sensing them: each extra slot inherits the live column's X and receives an
+independent, arbitrary Y. The `+1` count law is the same event seen from the
+other side — the tracker holds more contacts than the frame marks tipped. Some Y
+values land outside the logical range and clamp to `0`/`1` or `9599`, which is
+why those three values recur.
+
+**What is still unexplained.** Why the controller decides it has more than one
+contact. Nothing available to the host reports the peak amplitudes or thresholds
+that decision is made from, so the trigger cannot be identified without the
+firmware.
+
+The latch is the same failure with the finger gone: the last Y is retained while
+X is recomputed from a decaying signal, so the slot never clears.
+
+**Still not** a host decoding error, a missing report, or dropped frames: every
+report is 54 bytes and the count laws hold across all captures.
 
 ## 7. The link and the power are clean
 
