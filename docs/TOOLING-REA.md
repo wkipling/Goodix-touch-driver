@@ -41,11 +41,17 @@ REA finds the install through the `env` of its own server registration in Zed:
     "command": "npx",
     "args": ["-y", "rea-agents@6.8.0", "mcp"],
     "env": {
-      "GHIDRA_INSTALL_DIR": "/home/wkipling/ghidra_12.1.4_PUBLIC"
+      "GHIDRA_INSTALL_DIR": "/home/wkipling/ghidra_12.1.4_PUBLIC",
+      "JAVA_HOME": "/home/wkipling/jdk-21.0.13+9"
     }
   }
 }
 ```
+
+`JAVA_HOME` is not optional. REA probes `java` on PATH, and the system JDK here
+is a **runtime-only** build — `25.0.4.1` with no `javac` — which REA reports as
+`unsupported_version` even though the version number is new enough. Pointing it
+at the Temurin JDK, which has `javac`, is what satisfies the check.
 
 A backup of the settings file was left at
 `~/.config/zed/settings.json.bak-ghidra`.
